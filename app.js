@@ -931,6 +931,28 @@ function buildReviewHtml() {
 }
 
 
+
+// ===== Result Overlay（診断/互換用：必ず存在させる） =====
+let resultOverlay = null;
+function ensureResultOverlay() {
+  if (resultOverlay) return resultOverlay;
+  const el = document.createElement("div");
+  el.id = "resultOverlay";
+  el.style.display = "none";
+  el.style.position = "fixed";
+  el.style.inset = "0";
+  el.style.zIndex = "2000";
+  el.style.placeItems = "center";
+  el.style.padding = "16px";
+  el.style.background = "rgba(0,0,0,0.55)";
+  el.style.backdropFilter = "blur(8px)";
+  el.style.webkitBackdropFilter = "blur(8px)";
+  el.style.display = "none";
+  document.body.appendChild(el);
+  resultOverlay = el;
+  return el;
+}
+
 function showResultOverlay() {
   ensureResultOverlay();
 
