@@ -841,6 +841,16 @@ function judge() {
 
 // ===== Result Overlay（元ロジック維持） =====
 let resultOverlay = null;
+function ensureResultOverlay() {
+  if (resultOverlay) return resultOverlay;
+  const el = document.createElement("div");
+  el.id = "resultOverlay";
+  // 既存CSSに委ねる（存在しない場合でも最低限見えるよう保険）
+  el.style.display = "none";
+  document.body.appendChild(el);
+  resultOverlay = el;
+  return el;
+}
 
 function getUserMessageByRate(percent) {
   if (percent >= 90) return "素晴らしい！この調子！";
