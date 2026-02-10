@@ -22,16 +22,16 @@
 
       <main class="hub-grid" aria-label="メニュー">
         <!-- ✅リンク化：通常10問 -->
-        <button id="modeNormalBtn" class="hub-card primary" type="button">
+        <a id="modeNormalBtn" class="hub-card primary" href="./index.html?mode=normal&start=1">
           <div class="hub-main">通常10問</div>
           <div class="hub-sub">10 QUESTIONS / QUICK</div>
-        </button>
+        </a>
 
-        <!-- 連続学習 -->
-        <button id="modeEndlessBtn" class="hub-card primary" type="button">
+        <!-- ✅リンク化：連続学習 -->
+        <a id="modeEndlessBtn" class="hub-card primary" href="./index.html?mode=endless&start=1">
           <div class="hub-main">連続学習</div>
           <div class="hub-sub">ENDLESS / FOCUS</div>
-        </button>
+        </a>
 
         <!-- 図鑑（既存） -->
         <a id="openCollectionBtn" class="hub-card" href="https://naoki496.github.io/cards-hub/">
@@ -92,11 +92,11 @@
       <div id="question" class="question">CSVを読み込んでいます。</div>
       <div id="subline" class="subline"></div>
 
-        <div id="choicesArea">
-        <input id="answerInput" class="answer-input" type="text"
-               inputmode="kana" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-               placeholder="読みを入力（ひらがな）" />
-        <button id="submitBtn" class="choice submit" type="button">回答</button>
+      <div id="choicesArea">
+        <button class="choice" type="button" data-idx="0">読み込み中…</button>
+        <button class="choice" type="button" data-idx="1">---</button>
+        <button class="choice" type="button" data-idx="2">---</button>
+        <button class="choice" type="button" data-idx="3">---</button>
       </div>
 
       <div id="status" class="status"></div>
@@ -107,7 +107,7 @@
       </div>
 
       <div id="hint">
-        ※ 問題文全体を読んだうえで、【 】で囲まれた語の読みのみを答えてください。
+        ※〖〗で囲われた箇所は黄色発光でハイライトされます。
       </div>
     </div>
   </div>

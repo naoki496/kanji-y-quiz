@@ -1061,33 +1061,20 @@ function canBeginNow() {
 
 if (modeNormalBtn) {
   modeNormalBtn.addEventListener("click", async (e) => {
-    e.preventDefault?.();
-
-    // 読み込み未完了なら開始しない（ユーザーには理由を出す）
-    if (!startBtnEl || startBtnEl.disabled) {
-      if (startNoteEl) startNoteEl.textContent = "読み込み中です…少し待ってから押してください。";
-      return;
-    }
-
     setMode("normal");
-    try { await beginFromStartScreen({ auto: false }); } catch (err) { console.error(err); }
+    if (canBeginNow()) {
+      e.preventDefault();
+      try { await beginFromStartScreen({ auto: false }); } catch (err) { console.error(err); }
+    }
   });
 }
 
 if (modeEndlessBtn) {
   modeEndlessBtn.addEventListener("click", async (e) => {
-    e.preventDefault?.();
-
-    if (!startBtnEl || startBtnEl.disabled) {
-      if (startNoteEl) startNoteEl.textContent = "読み込み中です…少し待ってから押してください。";
-      return;
-    }
-
     setMode("endless");
-    try { await beginFromStartScreen({ auto: false }); } catch (err) { console.error(err); }
-  });
-}
-catch (err) { console.error(err); }
+    if (canBeginNow()) {
+      e.preventDefault();
+      try { await beginFromStartScreen({ auto: false }); } catch (err) { console.error(err); }
     }
   });
 }
