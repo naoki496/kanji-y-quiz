@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="./">
+  <title>文学史知識マスター</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+
+  <!-- =========================
+       START SCREEN (Cyber Console)
+       ========================= -->
+  <div id="startScreen" class="start-screen" aria-label="スタート画面">
+    <div class="hub">
+      <header class="hub-bar">
+        <div class="hub-title">文学史知識マスター</div>
+        <div class="hub-status"><span class="hub-dot" aria-hidden="true"></span><span>ONLINE</span></div>
+      </header>
+
+      <main class="hub-grid" aria-label="メニュー">
+        <!-- ✅リンク化：通常10問 -->
+        <a id="modeNormalBtn" class="hub-card primary" href="./index.html?mode=normal&start=1">
+          <div class="hub-main">通常10問</div>
+          <div class="hub-sub">10 QUESTIONS / QUICK</div>
+        </a>
+
+        <!-- ✅リンク化：連続学習 -->
+        <a id="modeEndlessBtn" class="hub-card primary" href="./index.html?mode=endless&start=1">
+          <div class="hub-main">連続学習</div>
+          <div class="hub-sub">ENDLESS / FOCUS</div>
+        </a>
+
+        <!-- 図鑑（既存） -->
+        <a id="openCollectionBtn" class="hub-card" href="https://naoki496.github.io/cards-hub/">
+          <div class="hub-main">図鑑</div>
+          <div class="hub-sub">COLLECTION / CARDS</div>
+        </a>
+
+        <!-- TOPへ戻る（指定URL） -->
+        <a id="backToTopBtn" class="hub-card exit" href="https://naoki496.github.io/kokugo-dojo/">
+          <div class="hub-main">TOPへ戻る</div>
+          <div class="hub-sub">EXIT / PORTAL</div>
+        </a>
+      </main>
+
+      <!-- ✅追加：4ボタン直下の注記（レイアウト非破壊） -->
+      <div style="margin-top:10px;font-size:12px;line-height:1.4;color:rgba(255,255,255,0.72);text-align:center;">
+        開始後はBGMが流れます
+      </div>
+
+      <!-- app.js互換のため残す（画面には出さない） -->
+      <button id="startBtn" class="start-hidden" type="button">START</button>
+      <div id="startNote" class="start-hidden"></div>
+
+      
+      
+      <!-- app.js互換のため残す（画面には出さない） -->
+      <button id="startBtn" class="start-hidden" type="button">START</button>
+      <div id="startNote" class="start-hidden"></div>
+    </div>
+  </div>
+
+  <!-- =========================
+       QUIZ UI
+       ========================= -->
+  <h1>文学史知識マスター</h1>
+
+  <div id="quiz" class="panel">
+    <div id="meta">
+      <div id="metaLeft">
+        <div id="modePill" class="mode-pill">通常（10問）</div>
+        <div id="progress">読み込み中…</div>
+        <div id="score">Score: 0</div>
+        <div id="comboLabel">最大COMBO x0</div>
+      </div>
+
+      <button id="bgmToggle" class="pill bgm-btn" type="button">BGM: OFF</button>
+    </div>
+
+    <div class="panel-inner">
+      <div id="meterArea">
+        <div id="meterText">
+          <div id="meterLabel">進捗 0/0 (0%)</div>
+          <div id="meterRight"> </div>
+        </div>
+        <div id="meterOuter"><div id="meterInner"></div></div>
+      </div>
+
+      <div class="q-gap"></div>
+
+      <div id="question" class="question">CSVを読み込んでいます。</div>
+      <div id="subline" class="subline"></div>
+
+      <div id="choicesArea">
+        <button class="choice" type="button" data-idx="0">読み込み中…</button>
+        <button class="choice" type="button" data-idx="1">---</button>
+        <button class="choice" type="button" data-idx="2">---</button>
+        <button class="choice" type="button" data-idx="3">---</button>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div id="controls">
+        <button id="nextBtn" class="ctrl" type="button" disabled>次へ</button>
+        <button id="restartBtn" class="ctrl" type="button">最初から</button>
+      </div>
+
+      <div id="hint">
+        ※〖〗で囲われた箇所は黄色発光でハイライトされます。
+      </div>
+    </div>
+  </div>
+
+  <script src="./csv.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
+
+
+
+
+
