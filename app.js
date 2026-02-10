@@ -1,4 +1,15 @@
-// app.js (global)
+/* eslint-disable no-console */
+(() => {
+"use strict";
+
+// ===== URL params =====
+const params = new URLSearchParams(location.search);
+const previewAll = params.get("preview") === "1";
+const debugMode  = params.get("debug") === "1";
+const URL_MODE = params.get("mode");
+const URL_AUTOSTART = params.get("start") === "1";
+
+// ===== Settings =====
 const TOTAL_QUESTIONS = 10;
 
 // ===== Timer settings =====
@@ -10,265 +21,165 @@ const AUDIO_FILES = {
   bgm: "./assets/bgm.mp3",
   correct: "./assets/correct.mp3",
   wrong: "./assets/wrong.mp3",
-  go: "./assets/go.mp3", // ★追加：GO SE
 };
 
-// ▼▼▼ A: cards.csv 受け皿（UI非変更） ▼▼▼
-let cardsAll = [];
-let cardPoolByRarity = { 3: [], 4: [], 5: [] };
+// ===== Storage keys =====
+const STORAGE_KEY_CARD_COUNTS = "hklobby.v1.cardCounts";
+const LEGACY_STORAGE_KEY_CARD_COUNTS = "kobunQuiz.v1.cardCounts";
 
-function normalizeCardRow(r) {
-  // cards.csv: id, rarity, name, img, wiki, weight
-  const id = String(r.id ?? "").trim();
-  const rarity = Number(r.rarity);
-  const name = String(r.name ?? "").trim();
-  const img = String(r.img ?? "").trim();
-  const wiki = String(r.wiki ?? "").trim();
-  const weightRaw = r.weight ?? "";
-  const weight = Number(weightRaw) || 1;
-  return { id, rarity, name, img, wiki, weight };
-}
+// quiz local keys (this repo only)
+const STORAGE_KEY_BGM_ON = "bungakusiQuiz.v1.bgmOn";
+const STORAGE_KEY_LAST_MODE = "bungakusiQuiz.v1.lastMode";
 
-function rebuildCardPoolsFromCsv() {
-  const next = { 3: [], 4: [], 5: [] };
-  if (!Array.isArray(cardsAll)) cardsAll = [];
-  for (const c of cardsAll) {
-    if (!c || !c.id) continue;
-    if (c.rarity === 3 || c.rarity === 4 || c.rarity === 5) next[c.rarity].push(c);
-  }
-  cardPoolByRarity = next;
-}
+// ===== DOM =====
+const startScreenEl = document.getElementById("startScreen");
+const modeNormalBtn = document.getElementById("modeNormalBtn");
+const modeEndlessBtn = document.getElementById("modeEndlessBtn");
+const startBtnEl = document.getElementById("startBtn");
+const startNoteEl = document.getElementById("startNote");
 
-function validateCardsCsv() {
-  const errs = [];
-  const warns = [];
+const quizEl = document.getElementById("quiz");
+const progressEl = document.getElementById("progress");
+const scoreEl = document.getElementById("score");
+const comboLabel = document.getElementById("comboLabel");
+const modePillEl = document.getElementById("modePill");
 
-  if (!Array.isArray(cardsAll) || cardsAll.length === 0) {
-    warns.push("cards.csv: カードが0件です（カード抽選が発生しません）");
-  }
+const meterInner = document.getElementById("meterInner");
+const meterLabel = document.getElementById("meterLabel");
 
-  const seen = new Map();
-  for (const c of cardsAll || []) {
-    const key = c?.id;
-    if (!key) {
-      errs.push("cards.csv: id が空の行があります");
-      continue;
-    }
-    seen.set(key, (seen.get(key) || 0) + 1);
-  }
-  for (const [id, n] of seen.entries()) {
-    if (n >= 2) errs.push(`cards.csv: id が重複しています: "${id}" x${n}`);
-  }
+const questionEl = document.getElementById("question");
+const sublineEl = document.getElementById("subline");
+const statusEl = document.getElementById("status");
 
-  for (const c of cardsAll || []) {
-    if (!c?.id) continue;
-    if (!c.name) warns.push(`cards.csv: name が空です (id=${c.id})`);
-    if (!c.img) errs.push(`cards.csv: img が空です (id=${c.id})`);
-    if (!(c.rarity === 3 || c.rarity === 4 || c.rarity === 5)) {
-      errs.push(`cards.csv: rarity が 3/4/5 ではありません (id=${c.id}, rarity=${c.rarity})`);
-    }
-    if (!Number.isFinite(Number(c.weight)) || Number(c.weight) <= 0) {
-      warns.push(`cards.csv: weight が不正なので 1 扱いにします (id=${c.id}, weight=${c.weight})`);
-    }
-  }
+const answerInput = document.getElementById("answerInput");
+const submitBtn = document.getElementById("submitBtn");
 
-  const s3 = (cardPoolByRarity[3] || []).length;
-  const s4 = (cardPoolByRarity[4] || []).length;
-  const s5 = (cardPoolByRarity[5] || []).length;
+const nextBtn = document.getElementById("nextBtn");
+const restartBtn = document.getElementById("restartBtn");
 
-  if (errs.length) {
-    console.groupCollapsed("%c[cards.csv] ERROR", "color:#ff6b6b;font-weight:900;");
-    errs.forEach((m) => console.error(m));
-    console.groupEnd();
-  }
-  if (warns.length) {
-    console.groupCollapsed("%c[cards.csv] WARN", "color:#ffd54a;font-weight:900;");
-    warns.forEach((m) => console.warn(m));
-    console.groupEnd();
-  }
-  console.log(`[cards.csv] total=${(cardsAll || []).length} / ★3=${s3} ★4=${s4} ★5=${s5}`);
+const bgmToggleEl = document.getElementById("bgmToggle");
 
-  return errs.length === 0;
-}
-// ▲▲▲ Aここまで ▲▲▲
+let timerOuterEl = document.getElementById("timerOuter");
+let timerInnerEl = document.getElementById("timerInner");
+let timerTextEl = document.getElementById("timerText");
 
+// ===== Runtime state =====
 let questions = [];
 let order = [];
 let index = 0;
 let score = 0;
-let locked = false;
-
-// Combo
 let combo = 0;
 let maxCombo = 0;
+let locked = false;
 
-// mode
-let mode = "normal";
+let mode = "normal"; // normal / endless
+let wrongOnlyRetried = false;
 
-// history（復習用）
-let history = [];
+// ===== Card data =====
+let cardsAll = [];
+let cardPoolByRarity = { 3: [], 4: [], 5: [] };
 
-// BGM/SE
-let bgmOn = false;
+// ===== Audio =====
 let audioUnlocked = false;
+let bgm = null;
+const sePool = makeSEPool();
 
-// ===== DOM =====
-const progressEl = document.getElementById("progress");
-const scoreEl = document.getElementById("score");
-const questionEl = document.getElementById("question");
-const sublineEl = document.getElementById("subline");
-const statusEl = document.getElementById("status");
-const choiceBtns = Array.from(document.querySelectorAll(".choice"));
-const nextBtn = document.getElementById("nextBtn");
-const restartBtn = document.getElementById("restartBtn");
-const meterInner = document.getElementById("meterInner");
-const meterLabel = document.getElementById("meterLabel");
-const comboLabel = document.getElementById("comboLabel");
-const quizEl = document.getElementById("quiz");
-const bgmToggleBtn = document.getElementById("bgmToggle");
-const modePillEl = document.getElementById("modePill");
+// ===== Local storage adapter =====
+const StorageAdapter = {
+  get(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  },
+  set(key, val) {
+    try { localStorage.setItem(key, val); } catch {}
+  },
+  remove(key) {
+    try { localStorage.removeItem(key); } catch {}
+  },
+};
 
-// Start Screen
-const startScreenEl = document.getElementById("startScreen");
-const startBtnEl = document.getElementById("startBtn");
-const startNoteEl = document.getElementById("startNote");
-const modeNormalBtn = document.getElementById("modeNormalBtn");
-const modeEndlessBtn = document.getElementById("modeEndlessBtn");
-const openCollectionBtn = document.getElementById("openCollectionBtn");
-
-// ===== URL Params (mode/start) =====
-const URLP = new URLSearchParams(location.search);
-const URL_MODE = URLP.get("mode");               // "normal" | "endless" | null
-const URL_AUTOSTART = URLP.get("start") === "1"; // true/false
-
-// ===== Audio objects =====
-const bgmAudio = new Audio(AUDIO_FILES.bgm);
-bgmAudio.loop = true;
-bgmAudio.preload = "auto";
-bgmAudio.volume = 0.45;
-
-const seCorrect = new Audio(AUDIO_FILES.correct);
-seCorrect.preload = "auto";
-seCorrect.volume = 0.9;
-
-const seWrong = new Audio(AUDIO_FILES.wrong);
-seWrong.preload = "auto";
-seWrong.volume = 0.9;
-
-const seGo = new Audio(AUDIO_FILES.go);
-seGo.preload = "auto";
-seGo.volume = 0.95;
-
-// ===== SE Pool（同一結果が連続しても鳴らすため）=====
-const SE_POOL_SIZE = 4;
-
-function makeSEPool(src, volume) {
-  const pool = Array.from({ length: SE_POOL_SIZE }, () => {
-    const a = new Audio(src);
-    a.preload = "auto";
-    a.volume = volume;
-    return a;
-  });
-  let idx = 0;
+// ===== Cards.csv normalize =====
+function normalizeCardRow(r) {
   return {
-    play() {
-      const a = pool[idx];
-      idx = (idx + 1) % pool.length;
-      try {
-        a.pause();
-        a.currentTime = 0;
-        const p = a.play();
-        if (p && typeof p.catch === "function") p.catch(() => {});
-      } catch (_) {}
-    },
+    id: String(r.id ?? "").trim(),
+    rarity: Number(r.rarity) || 0,
+    name: String(r.name ?? "").trim(),
+    img: String(r.img ?? "").trim(),
+    wiki: String(r.wiki ?? "").trim(),
+    weight: Number(r.weight) || 0,
   };
 }
 
-const seCorrectPool = makeSEPool(AUDIO_FILES.correct, 0.9);
-const seWrongPool = makeSEPool(AUDIO_FILES.wrong, 0.9);
-const seGoPool = makeSEPool(AUDIO_FILES.go, 0.95);
+function rebuildCardPoolsFromCsv() {
+  cardPoolByRarity = { 3: [], 4: [], 5: [] };
+  for (const c of cardsAll) {
+    if (c.rarity === 3 || c.rarity === 4 || c.rarity === 5) {
+      cardPoolByRarity[c.rarity].push(c);
+    }
+  }
+}
 
-// ===== Storage (localStorage 可用性チェック + フォールバック) =====
-// ✅ 共通キー（DOJO/両クイズ/図鑑で共有）
-const STORAGE_KEY_CARD_COUNTS = "hklobby.v1.cardCounts";
-// ✅ 旧キー救済（過去に残っていた場合のみ1回だけ移行）
-const LEGACY_KEY_CARD_COUNTS = "kobunQuiz.v1.cardCounts";
+function validateCardsCsv() {
+  const seen = new Set();
+  for (const c of cardsAll) {
+    if (!c.id) throw new Error(`[cards.csv] empty id detected`);
+    if (seen.has(c.id)) throw new Error(`[cards.csv] duplicate id: ${c.id}`);
+    seen.add(c.id);
+  }
+}
+
+function makeSEPool() {
+  return {
+    correct: null,
+    wrong: null,
+  };
+}
 
 function storageAvailable() {
   try {
-    const x = "__storage_test__";
-    window.localStorage.setItem(x, x);
-    window.localStorage.removeItem(x);
+    const k = "__t__";
+    localStorage.setItem(k, "1");
+    localStorage.removeItem(k);
     return true;
   } catch {
     return false;
   }
 }
 
-const StorageAdapter = (() => {
-  const mem = new Map();
-  const ok = storageAvailable();
-  return {
-    isPersistent: ok,
-    get(key) {
-      if (ok) return window.localStorage.getItem(key);
-      return mem.get(key) ?? null;
-    },
-    set(key, value) {
-      try {
-        if (ok) window.localStorage.setItem(key, value);
-        else mem.set(key, value);
-      } catch (e) {
-        mem.set(key, value);
-        console.warn("[StorageAdapter] localStorage write failed; fallback to memory.", e);
-      }
-    },
-    remove(key) {
-      try {
-        if (ok) window.localStorage.removeItem(key);
-        else mem.delete(key);
-      } catch (_) {
-        mem.delete(key);
-      }
-    },
-  };
-})();
-
+// ===== Card storage =====
 function migrateCardCountsIfNeeded() {
-  // ✅ 新キーが無く、旧キーがあるときだけ移行（1回限り）
+  if (!storageAvailable()) return;
+  const cur = StorageAdapter.get(STORAGE_KEY_CARD_COUNTS);
+  if (cur) return;
+
+  const legacy = StorageAdapter.get(LEGACY_STORAGE_KEY_CARD_COUNTS);
+  if (!legacy) return;
+
+  // 旧キーから移行
   try {
-    const hasNew = !!StorageAdapter.get(STORAGE_KEY_CARD_COUNTS);
-    const legacyRaw = StorageAdapter.get(LEGACY_KEY_CARD_COUNTS);
-    if (!hasNew && legacyRaw) {
-      const parsed = JSON.parse(legacyRaw);
-      if (parsed && typeof parsed === "object") {
-        StorageAdapter.set(STORAGE_KEY_CARD_COUNTS, legacyRaw);
-        StorageAdapter.remove(LEGACY_KEY_CARD_COUNTS);
-        console.log("[migrate] cardCounts migrated to", STORAGE_KEY_CARD_COUNTS);
-      }
-    }
-  } catch (e) {
-    console.warn("[migrate] skipped:", e);
+    JSON.parse(legacy);
+    StorageAdapter.set(STORAGE_KEY_CARD_COUNTS, legacy);
+  } catch {
+    // legacy broken -> ignore
   }
 }
 
 function loadCardCounts() {
-  const raw = StorageAdapter.get(STORAGE_KEY_CARD_COUNTS);
-  if (!raw) return {};
   try {
-    const obj = JSON.parse(raw);
-    return obj && typeof obj === "object" ? obj : {};
+    const raw = StorageAdapter.get(STORAGE_KEY_CARD_COUNTS);
+    return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
   }
 }
+
 function saveCardCounts(counts) {
   StorageAdapter.set(STORAGE_KEY_CARD_COUNTS, JSON.stringify(counts));
 }
 
 // ===== Utils =====
 function disableChoices(disabled) {
-  choiceBtns.forEach((b) => (b.disabled = disabled));
+  if (answerInput) answerInput.disabled = disabled;
+  if (submitBtn) submitBtn.disabled = disabled;
 }
 
 function shuffle(arr) {
@@ -284,33 +195,25 @@ function normalizeAnswer(raw) {
     .trim()
     .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
     .replace(/[^\d]/g, "");
-  return Number(s);
+  const n = Number(s);
+  return n || 0;
 }
 
 function normalizeRow(r) {
-  const ans = normalizeAnswer(r.answer);
-  if (!(ans >= 1 && ans <= 4)) {
-    throw new Error(`answer が 1〜4 ではありません: "${r.answer}" (id=${r.id ?? "?"})`);
-  }
   return {
-    id: String(r.id ?? ""),
-    question: String(r.question ?? ""),
-    source: String(r.source ?? ""),
-    choices: [
-      String(r.choice1 ?? ""),
-      String(r.choice2 ?? ""),
-      String(r.choice3 ?? ""),
-      String(r.choice4 ?? ""),
-    ],
-    answer: ans,
+    id: String(r.id ?? "").trim(),
+    question: String(r.question ?? "").trim(),
+    // 現行 questions.csv は「【】内のみ」の読みを入れる想定
+    answer: String(r.answer ?? "").trim(),
+    // 別解は | 区切り（空でもOK）
+    alt: String(r.alt ?? "").trim(),
+    // 互換用（存在すれば表示）
+    source: String(r.source ?? "").trim(),
   };
 }
 
-// =====================================================
-// ✅HTMLエスケープ（健全版）
-// =====================================================
-function escapeHtml(str) {
-  return String(str)
+function escapeHtml(s) {
+  return String(s ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -318,183 +221,140 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
-function highlightBrackets(str) {
-  const safe = escapeHtml(str);
-  return safe.replace(/【(.*?)】/g, '【<span class="hl">$1</span>】');
+function highlightBrackets(text) {
+  const html = escapeHtml(text);
+  // 【】内だけハイライト
+  return html.replace(/【([^】]+)】/g, '<span class="hl">【$1】</span>');
+}
+
+function normalizeYomi(raw) {
+  // IME/入力ゆれ吸収：空白・一部記号除去、カタカナ→ひらがな
+  const s0 = String(raw ?? "").trim();
+  const s1 = s0
+    .replace(/[\s\u3000]+/g, "")                 // 半角/全角スペース
+    .replace(/[・。、「」、,.．]/g, "")          // 句読点など
+    .replace(/[ー－−–—]/g, "");                 // 長音/ダッシュ類（不要なら消す）
+  // カタカナ→ひらがな
+  return s1.replace(/[ァ-ン]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 
 function pickRandom(arr) {
+  if (!arr || !arr.length) return null;
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function pickWeighted(arr, getWeight) {
+function pickWeighted(arr) {
   if (!arr || !arr.length) return null;
-  let total = 0;
-  const ws = new Array(arr.length);
-  for (let i = 0; i < arr.length; i++) {
-    let w = Number(getWeight(arr[i]));
-    if (!Number.isFinite(w) || w <= 0) w = 1;
-    ws[i] = w;
-    total += w;
-  }
-  if (!Number.isFinite(total) || total <= 0) return pickRandom(arr);
-
+  const total = arr.reduce((sum, a) => sum + (a.weight || 1), 0);
   let r = Math.random() * total;
-  for (let i = 0; i < arr.length; i++) {
-    r -= ws[i];
-    if (r <= 0) return arr[i];
+  for (const a of arr) {
+    r -= (a.weight || 1);
+    if (r <= 0) return a;
   }
   return arr[arr.length - 1];
 }
 
-// ===== Countdown Overlay（開始演出のみ追加）=====
-let countdownOverlayEl = null;
-
 function ensureCountdownOverlay() {
-  if (countdownOverlayEl) return countdownOverlayEl;
-
-  const el = document.createElement("div");
+  let el = document.getElementById("countdownOverlay");
+  if (el) return el;
+  el = document.createElement("div");
   el.id = "countdownOverlay";
+  el.className = "countdown";
   el.innerHTML = `<div class="countdown-num" id="countdownNum">3</div>`;
-  el.style.display = "none";
   document.body.appendChild(el);
-  countdownOverlayEl = el;
   return el;
 }
 
 async function runCountdown() {
   const overlay = ensureCountdownOverlay();
-  const numEl = overlay.querySelector("#countdownNum");
-
-  overlay.style.display = "flex";
-
-  const seq = ["3", "2", "1", "GO"];
-  for (let i = 0; i < seq.length; i++) {
-    numEl.textContent = seq[i];
-
-    // ★GO の瞬間に SE
-    if (seq[i] === "GO") seGoPool.play();
-
-    numEl.classList.remove("pop");
-    void numEl.offsetWidth;
-    numEl.classList.add("pop");
-    await new Promise((r) => setTimeout(r, 850));
-  }
-
-  overlay.style.display = "none";
+  const numEl = document.getElementById("countdownNum");
+  overlay.classList.add("show");
+  let n = 3;
+  if (numEl) numEl.textContent = String(n);
+  await new Promise((r) => setTimeout(r, 400));
+  n = 2;
+  if (numEl) numEl.textContent = String(n);
+  await new Promise((r) => setTimeout(r, 400));
+  n = 1;
+  if (numEl) numEl.textContent = String(n);
+  await new Promise((r) => setTimeout(r, 400));
+  overlay.classList.remove("show");
+  await new Promise((r) => setTimeout(r, 120));
 }
 
-// ===== Card reward helpers =====
 function rollCardByStars(stars) {
-  if (stars < 3) return null;
+  // stars: 0..5
+  if (!cardsAll.length) return null;
 
-  // 評価★ごとの排出確率テーブル（合計 1.0）
-  const DROP_TABLE = {
-    3: [
-      { tier: 3, p: 0.85 },
-      { tier: 4, p: 0.15 },
-    ],
-    4: [
-      { tier: 3, p: 0.60 },
-      { tier: 4, p: 0.30 },
-      { tier: 5, p: 0.10 },
-    ],
-    5: [
-      { tier: 3, p: 0.45 },
-      { tier: 4, p: 0.35 },
-      { tier: 5, p: 0.20 },
-    ],
-  };
-
-  const table = DROP_TABLE[Math.min(5, stars)];
-  if (!table) return null;
-
-  // tier抽選
-  let r = Math.random();
-  let tier = null;
-  for (const row of table) {
-    r -= row.p;
-    if (r <= 0) {
-      tier = row.tier;
-      break;
-    }
-  }
-  if (!tier) tier = table[table.length - 1].tier;
-
-  // CSVプールから抽選
-  const pool = cardPoolByRarity?.[tier] || [];
-  if (!pool.length) return null;
-
-  const picked = pickWeighted(pool, (c) => c.weight ?? 1);
-  if (!picked) return null;
-
-  return { ...picked, rarity: tier };
+  // simple mapping
+  if (stars >= 5) return pickWeighted(cardPoolByRarity[5]) || pickWeighted(cardPoolByRarity[4]) || pickWeighted(cardPoolByRarity[3]);
+  if (stars >= 4) return pickWeighted(cardPoolByRarity[4]) || pickWeighted(cardPoolByRarity[3]);
+  return pickWeighted(cardPoolByRarity[3]);
 }
 
 function recordCard(card) {
   const counts = loadCardCounts();
-  counts[card.id] = (counts[card.id] ?? 0) + 1;
+  const cur = counts[card.id] ?? 0;
+  counts[card.id] = cur + 1;
   saveCardCounts(counts);
   return counts[card.id];
 }
 
 function playCardEffect(rarity) {
+  // effect is CSS-driven; placeholder
   try {
-    const el = document.createElement("div");
-    el.className = `card-effect r${rarity}`;
-    el.innerHTML = `<div class="card-effect-glow"></div>`;
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), rarity === 5 ? 1550 : 1100);
+    document.body.dataset.cardFx = String(rarity || "");
+    setTimeout(() => { try { delete document.body.dataset.cardFx; } catch (_) {} }, 800);
   } catch (_) {}
 }
 
 function updateScoreUI() {
   if (scoreEl) scoreEl.textContent = `Score: ${score}`;
+  if (comboLabel) comboLabel.textContent = `最大COMBO x${maxCombo}`;
 }
 
 function updateModeUI() {
-  const label = mode === "endless" ? "連続学習" : "通常（10問）";
-  if (modePillEl) modePillEl.textContent = label;
+  if (!modePillEl) return;
+  modePillEl.textContent = mode === "endless" ? "連続学習" : "通常（10問）";
 }
 
 function updateMeterUI() {
   const total = order.length || 1;
-  const cur = Math.min(index + 1, total);
-  const percent = Math.round((cur / total) * 100);
-  if (meterLabel) meterLabel.textContent = `進捗 ${cur}/${total} (${percent}%)`;
-  if (comboLabel) comboLabel.textContent = `最大COMBO x${maxCombo}`;
+  const done = Math.min(index, total);
+  const percent = Math.round((done / total) * 100);
+
+  if (meterLabel) meterLabel.textContent = `進捗 ${done}/${total} (${percent}%)`;
   if (meterInner) meterInner.style.width = `${percent}%`;
 }
 
 function setStatusGlitchOnce() {
   if (!statusEl) return;
-  statusEl.classList.remove("glitch");
-  void statusEl.offsetWidth;
   statusEl.classList.add("glitch");
-  setTimeout(() => statusEl.classList.remove("glitch"), 420);
+  setTimeout(() => {
+    try { statusEl.classList.remove("glitch"); } catch (_) {}
+  }, 400);
 }
 
-function updateStatusUI(message, { glitch = false } = {}) {
-  // ★⑤対応：ステータス行は原則空運用（必要時だけ使う）
-  // ここは使うときだけ呼ぶ前提。render() では statusEl を空にする。
-  const comboText = combo >= 2 ? ` / COMBO x${combo}` : "";
-  if (statusEl) statusEl.textContent = `${message}${comboText}`;
-  if (glitch) setStatusGlitchOnce();
+function updateStatusUI(text, opt = {}) {
+  if (!statusEl) return;
+  statusEl.textContent = text || "";
+  if (opt.glitch) setStatusGlitchOnce();
 }
 
-// ===== Effects =====
 function flashGood() {
   if (!quizEl) return;
   quizEl.classList.remove("flash-good");
   void quizEl.offsetWidth;
   quizEl.classList.add("flash-good");
 }
+
 function shakeBad() {
   if (!quizEl) return;
-  quizEl.classList.remove("shake");
+  quizEl.classList.remove("shake-bad");
   void quizEl.offsetWidth;
-  quizEl.classList.add("shake");
+  quizEl.classList.add("shake-bad");
 }
+
 function pulseNext() {
   if (!nextBtn) return;
   nextBtn.classList.remove("pulse-next");
@@ -502,180 +362,109 @@ function pulseNext() {
   nextBtn.classList.add("pulse-next");
 }
 
-// ===== Audio =====
 async function unlockAudioOnce() {
   if (audioUnlocked) return;
   audioUnlocked = true;
+
   try {
-    bgmAudio.muted = true;
-    await bgmAudio.play();
-    bgmAudio.pause();
-    bgmAudio.currentTime = 0;
-    bgmAudio.muted = false;
+    const a = new Audio();
+    a.src = AUDIO_FILES.correct;
+    await a.play().catch(() => {});
+    a.pause();
+  } catch (_) {}
+}
 
-    // GO SE も同様にアンロック（念のため）
-    try {
-      seGo.muted = true;
-      await seGo.play();
-      seGo.pause();
-      seGo.currentTime = 0;
-      seGo.muted = false;
-    } catch (_) {
-      seGo.muted = false;
-    }
-  } catch (_) {
-    bgmAudio.muted = false;
-    seGo.muted = false;
+function setBgm(on) {
+  StorageAdapter.set(STORAGE_KEY_BGM_ON, on ? "1" : "0");
+  if (bgmToggleEl) bgmToggleEl.textContent = `BGM: ${on ? "ON" : "OFF"}`;
+
+  if (!bgm) {
+    bgm = new Audio(AUDIO_FILES.bgm);
+    bgm.loop = true;
+    bgm.volume = 0.35;
+  }
+
+  if (on) {
+    bgm.play().catch(() => {});
+  } else {
+    try { bgm.pause(); } catch (_) {}
   }
 }
 
-async function setBgm(on) {
-  bgmOn = on;
-  if (bgmToggleBtn) {
-    bgmToggleBtn.classList.toggle("on", bgmOn);
-    bgmToggleBtn.textContent = bgmOn ? "BGM: ON" : "BGM: OFF";
-  }
-
-  if (!bgmOn) {
-    try { bgmAudio.pause(); } catch (_) {}
-    return;
-  }
+function playSE(kind) {
   try {
-    await unlockAudioOnce();
-    await bgmAudio.play();
-  } catch (e) {
-    console.warn(e);
-    if (statusEl) statusEl.textContent = "BGMの再生がブロックされました。もう一度BGMボタンを押してください。";
-    bgmOn = false;
-    if (bgmToggleBtn) {
-      bgmToggleBtn.classList.remove("on");
-      bgmToggleBtn.textContent = "BGM: OFF";
+    if (kind === "correct") {
+      if (!sePool.correct) sePool.correct = new Audio(AUDIO_FILES.correct);
+      sePool.correct.currentTime = 0;
+      sePool.correct.play().catch(() => {});
+    } else {
+      if (!sePool.wrong) sePool.wrong = new Audio(AUDIO_FILES.wrong);
+      sePool.wrong.currentTime = 0;
+      sePool.wrong.play().catch(() => {});
     }
-  }
+  } catch (_) {}
 }
 
-function playSE(which) {
-  if (which === "correct") seCorrectPool.play();
-  else seWrongPool.play();
-}
-
-// =====================================================
-// ✅ TIMER UI (injected) / timer logic（従来運用）
-// =====================================================
-let timerOuterEl = null;
-let timerInnerEl = null;
-let timerTextEl = null;
-let timerLoopId = null;
-let timerEndAt = 0;
-let timerTotalMs = QUESTION_TIME_SEC * 1000;
+// ===== Timer UI =====
+let timerHandle = null;
+let timerStartAt = 0;
 
 function ensureTimerUI() {
-  if (timerOuterEl && timerInnerEl && timerTextEl) return;
-
-  const meterArea = document.getElementById("meterArea");
-  if (!meterArea) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "timer-wrap";
-  wrap.innerHTML = `
-    <div class="timer-head">
-      <div class="timer-title">TIME</div>
-      <div id="timerText" class="timer-text">--</div>
-    </div>
-    <div id="timerOuter" class="timer-outer"><div id="timerInner" class="timer-inner"></div></div>
-  `;
-
-  meterArea.appendChild(wrap);
-  timerOuterEl = wrap.querySelector("#timerOuter");
-  timerInnerEl = wrap.querySelector("#timerInner");
-  timerTextEl = wrap.querySelector("#timerText");
+  timerOuterEl = document.getElementById("timerOuter");
+  timerInnerEl = document.getElementById("timerInner");
+  timerTextEl = document.getElementById("timerText");
 }
 
 function stopTimer() {
-  if (timerLoopId) {
-    clearInterval(timerLoopId);
-    timerLoopId = null;
+  if (timerHandle) {
+    clearInterval(timerHandle);
+    timerHandle = null;
   }
-  if (timerOuterEl) timerOuterEl.classList.remove("warn");
 }
 
 function setTimerBarStyleByRemain(remainMs) {
   if (!timerInnerEl) return;
-
-  const frac = Math.max(0, Math.min(1, remainMs / timerTotalMs)); // 1 -> 0
-
-  // Amber -> White
-  const t = 1 - frac; // 0..1
-  const g = Math.round(176 + (255 - 176) * t);
-  const b = Math.round(0 + 255 * t);
-  const r = 255;
-
-  const alphaA = 0.78 + t * 0.10;
-  const alphaB = 0.34 + t * 0.14;
-
-  const cA = `rgba(${r}, ${g}, ${b}, ${alphaA.toFixed(2)})`;
-  const cB = `rgba(${r}, ${Math.max(160, g - 25)}, ${Math.max(0, b - 35)}, ${alphaB.toFixed(2)})`;
-
-  timerInnerEl.style.background = `linear-gradient(90deg, ${cA}, ${cB})`;
-
-  const glowA = Math.min(0.38, 0.20 + t * 0.22);
-  const blur = Math.round(18 + t * 16);
-
-  timerInnerEl.style.boxShadow = `0 0 ${blur}px rgba(255, 176, 0, ${glowA.toFixed(2)})`;
+  if (remainMs <= WARN_AT_SEC * 1000) {
+    timerInnerEl.style.filter = "brightness(1.25)";
+  } else {
+    timerInnerEl.style.filter = "";
+  }
 }
 
 function startTimerForQuestion() {
-  ensureTimerUI();
   stopTimer();
+  ensureTimerUI();
 
-  timerTotalMs = QUESTION_TIME_SEC * 1000;
-  timerEndAt = Date.now() + timerTotalMs;
+  const totalMs = QUESTION_TIME_SEC * 1000;
+  timerStartAt = Date.now();
 
-  if (timerTextEl) timerTextEl.textContent = `${QUESTION_TIME_SEC.toFixed(0)}.0s`;
-  if (timerInnerEl) timerInnerEl.style.width = "100%";
-  setTimerBarStyleByRemain(timerTotalMs);
+  const tick = () => {
+    const elapsed = Date.now() - timerStartAt;
+    const remain = Math.max(0, totalMs - elapsed);
 
-  timerLoopId = setInterval(() => {
-    const now = Date.now();
-    const remain = timerEndAt - now;
+    if (timerTextEl) timerTextEl.textContent = `${(remain / 1000).toFixed(1)}s`;
+    if (timerInnerEl) {
+      timerInnerEl.style.width = `${(remain / totalMs) * 100}%`;
+      setTimerBarStyleByRemain(remain);
+    }
 
     if (remain <= 0) {
       stopTimer();
       onTimeUp();
-      return;
     }
+  };
 
-    const sec = remain / 1000;
-    if (timerTextEl) timerTextEl.textContent = `${sec.toFixed(1)}s`;
-
-    const pct = Math.max(0, Math.min(100, (remain / timerTotalMs) * 100));
-    if (timerInnerEl) timerInnerEl.style.width = `${pct}%`;
-
-    const isWarn = sec <= WARN_AT_SEC;
-
-    // ★①対応：5秒切ると warn クラス（＋バー赤化）
-    if (timerOuterEl) {
-      if (isWarn) timerOuterEl.classList.add("warn");
-      else timerOuterEl.classList.remove("warn");
-    }
-
-    if (isWarn && timerInnerEl) {
-      timerInnerEl.style.background =
-        "linear-gradient(90deg, rgba(255,70,70,0.95), rgba(255,180,80,0.65))";
-      timerInnerEl.style.boxShadow =
-        "0 0 28px rgba(255,70,70,0.35), 0 0 60px rgba(255,70,70,0.16)";
-    } else {
-      setTimerBarStyleByRemain(remain);
-    }
-  }, 100);
+  tick();
+  timerHandle = setInterval(tick, 100);
 }
 
 function triggerTimeUpScanlineOnce() {
-  if (!quizEl) return;
-  quizEl.classList.remove("timeup-scan");
-  void quizEl.offsetWidth;
-  quizEl.classList.add("timeup-scan");
-  setTimeout(() => quizEl.classList.remove("timeup-scan"), 900);
+  const el = document.createElement("div");
+  el.className = "timeup-scanline";
+  document.body.appendChild(el);
+  setTimeout(() => {
+    try { el.remove(); } catch (_) {}
+  }, 600);
 }
 
 function onTimeUp() {
@@ -685,22 +474,17 @@ function onTimeUp() {
   disableChoices(true);
 
   const q = order[index];
-  const correctIdx = q.answer - 1;
+  const inputRaw = answerInput ? answerInput.value : "";
+  const input = normalizeYomi(inputRaw);
 
-  // ★④対応：時間切れは必ず「誤答」として履歴に入れる（totalに含める）
   history.push({
     q,
-    selectedIdx: -1,
-    correctIdx,
+    inputRaw,
+    inputNorm: input,
+    candidates: [normalizeYomi(q.answer)].filter(Boolean),
     isCorrect: false,
     isTimeUp: true,
   });
-
-  // ★③対応：正答を示す
-  try {
-    choiceBtns.forEach((btn) => btn.classList.remove("correct", "wrong"));
-    if (choiceBtns[correctIdx]) choiceBtns[correctIdx].classList.add("correct");
-  } catch (_) {}
 
   // combo は確実に切る
   combo = 0;
@@ -708,17 +492,16 @@ function onTimeUp() {
   updateMeterUI();
   updateScoreUI();
 
-  // ★②対応：走査線
+  // 走査線
   triggerTimeUpScanlineOnce();
 
-  // ステータスは必要なら短く
-  updateStatusUI("TIME UP", { glitch: true });
+  updateStatusUI(`TIME UP（正解：${q.answer}）`, { glitch: true });
 
   if (nextBtn) nextBtn.disabled = false;
   pulseNext();
 }
 
-// ===== Rendering / Session =====
+// ===== Core =====
 function render() {
   const q = order[index];
 
@@ -732,13 +515,21 @@ function render() {
 
   if (sublineEl) sublineEl.textContent = "";
 
-  choiceBtns.forEach((btn, i) => {
-    btn.innerHTML = highlightBrackets(q.choices[i] || "---");
-    btn.classList.remove("correct", "wrong");
-    btn.disabled = false;
-  });
+  // 入力UI
+  if (answerInput) {
+    answerInput.value = "";
+    answerInput.disabled = false;
+    // セッション開始直後の一拍後フォーカス（スマホでの表示崩れ回避）
+    setTimeout(() => {
+      try { answerInput.focus(); } catch (_) {}
+    }, 0);
+  }
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.classList.remove("correct", "wrong");
+  }
 
-  // ★⑤対応：ここは空（「選択してください」は出さない）
+  // ステータスは空
   if (statusEl) statusEl.textContent = "";
 
   if (nextBtn) nextBtn.disabled = true;
@@ -748,21 +539,24 @@ function render() {
 }
 
 function startWithPool(pool) {
-  score = 0;
+  order = pool.slice();
+  if (!previewAll) shuffle(order);
+
+  if (mode === "normal") order = order.slice(0, TOTAL_QUESTIONS);
+
   index = 0;
+  score = 0;
   combo = 0;
   maxCombo = 0;
+  locked = false;
+  wrongOnlyRetried = false;
   history = [];
 
-  if (!pool.length) throw new Error("問題が0件です（CSVの内容を確認してください）");
-  const shuffled = shuffle([...pool]);
-
-  order = shuffled.slice(0, Math.min(TOTAL_QUESTIONS, shuffled.length));
   render();
 }
 
 function startNewSession() {
-  startWithPool([...questions]);
+  startWithPool(questions);
 }
 
 function retryWrongOnlyOnce() {
@@ -774,36 +568,43 @@ function retryWrongOnlyOnce() {
   startWithPool(wrong);
 }
 
-// ===== Judge =====
-function judge(selectedIdx) {
+function judge() {
   if (locked) return;
   locked = true;
 
   stopTimer();
 
   disableChoices(true);
-  const q = order[index];
-  const correctIdx = q.answer - 1;
-  const isCorrect = selectedIdx === correctIdx;
 
-  history.push({ q, selectedIdx, correctIdx, isCorrect, isTimeUp: false });
+  const q = order[index];
+  const inputRaw = answerInput ? answerInput.value : "";
+  const input = normalizeYomi(inputRaw);
+
+  const candidates = [q.answer]
+    .concat(q.alt ? q.alt.split("|") : [])
+    .map((s) => normalizeYomi(s))
+    .filter(Boolean);
+
+  const isCorrect = input.length > 0 && candidates.includes(input);
+
+  history.push({ q, inputRaw, inputNorm: input, candidates, isCorrect, isTimeUp: false });
 
   if (isCorrect) {
     score++;
     combo++;
     if (combo > maxCombo) maxCombo = combo;
 
-    if (choiceBtns[selectedIdx]) choiceBtns[selectedIdx].classList.add("correct");
+    if (submitBtn) submitBtn.classList.add("correct");
     flashGood();
     playSE("correct");
     updateStatusUI("正解");
   } else {
     combo = 0;
-    if (choiceBtns[selectedIdx]) choiceBtns[selectedIdx].classList.add("wrong");
-    if (choiceBtns[correctIdx]) choiceBtns[correctIdx].classList.add("correct");
+    if (submitBtn) submitBtn.classList.add("wrong");
     shakeBad();
     playSE("wrong");
-    updateStatusUI("不正解");
+    // 仕様：解答は【】内のみ。正解は短いので出して学習効率を上げる
+    updateStatusUI(`不正解（正解：${q.answer}）`);
   }
 
   updateScoreUI();
@@ -813,28 +614,31 @@ function judge(selectedIdx) {
   pulseNext();
 }
 
-// ===== Result Overlay（元ロジック維持） =====
-let resultOverlay = null;
+function getUserMessageByRate(rate) {
+  if (rate >= 95) return "完璧です。知識が仕上がっています。";
+  if (rate >= 80) return "とても良いです。弱点だけ潰しましょう。";
+  if (rate >= 60) return "合格圏。間違いを復習すれば伸びます。";
+  if (rate >= 40) return "基礎固めの途中。復習の量で勝てます。";
+  return "ここから伸びます。反復で定着させましょう。";
+}
 
-function getUserMessageByRate(percent) {
-  if (percent >= 90) return "素晴らしい！この調子！";
-  if (percent >= 70) return "よく覚えられているぞ！";
-  if (percent >= 40) return "ここから更に積み重ねよう！";
-  return "まずは基礎知識から始めよう！";
+function calcStars(score, total) {
+  const rate = score / Math.max(1, total);
+  if (rate >= 0.95) return 5;
+  if (rate >= 0.85) return 4;
+  if (rate >= 0.70) return 3;
+  if (rate >= 0.50) return 2;
+  if (rate >= 0.30) return 1;
+  return 0;
 }
-function calcStars(score0, total) {
-  const percent = total ? (score0 / total) * 100 : 0;
-  if (percent >= 90) return 5;
-  if (percent >= 80) return 4;
-  if (percent >= 65) return 3;
-  if (percent >= 50) return 2;
-  return 1;
-}
-function calcRankName(stars, maxCombo0) {
-  const boost = maxCombo0 >= 6 ? 1 : 0;
-  const s = Math.min(5, Math.max(1, stars + boost));
-  const table = { 1: "見習い", 2: "一人前", 3: "職人", 4: "達人", 5: "神" };
-  return table[s];
+
+function calcRankName(stars, maxCombo) {
+  if (stars >= 5 && maxCombo >= 8) return "S+";
+  if (stars >= 5) return "S";
+  if (stars >= 4) return "A";
+  if (stars >= 3) return "B";
+  if (stars >= 2) return "C";
+  return "D";
 }
 
 function buildReviewHtml() {
@@ -846,28 +650,30 @@ function buildReviewHtml() {
       </div>
     `;
   }
-  const items = wrong.map((h, idx) => {
-    const q = h.q;
-    const qText = q.source ? `${q.question}（${q.source}）` : q.question;
 
-    const choicesHtml = q.choices
-      .map((c, i) => {
-        const isC = i === h.correctIdx;
-        const isS = i === h.selectedIdx;
-        const cls = ["rv-choice", isC ? "is-correct" : "", isS ? "is-selected" : ""]
-          .filter(Boolean)
-          .join(" ");
-        return `<div class="${cls}">${highlightBrackets(c)}</div>`;
-      })
-      .join("");
+  const items = wrong
+    .map((h, idx) => {
+      const q = h.q;
+      const qText = q.source ? `${q.question}（${q.source}）` : q.question;
+      const user = escapeHtml(String(h.inputRaw ?? ""));
+      const ans = escapeHtml(String(q.answer ?? ""));
+      const alt = String(q.alt ?? "").trim();
+      const altHtml = alt
+        ? `<div class="rv-choice" style="opacity:.85;">別解：${escapeHtml(alt)}</div>`
+        : "";
 
-    return `
-      <div class="rv-item">
-        <div class="rv-q">#${idx + 1} ${highlightBrackets(qText)}</div>
-        <div class="rv-choices">${choicesHtml}</div>
-      </div>
-    `;
-  }).join("");
+      return `
+        <div class="rv-item">
+          <div class="rv-q">#${idx + 1} ${highlightBrackets(qText)}</div>
+          <div class="rv-choices">
+            <div class="rv-choice is-selected">あなたの入力：${user || "（未入力）"}</div>
+            <div class="rv-choice is-correct">正解：${ans}</div>
+            ${altHtml}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
 
   return `
     <div class="review">
@@ -877,58 +683,52 @@ function buildReviewHtml() {
   `;
 }
 
+let resultOverlay = null;
+
 function ensureResultOverlay() {
-  if (resultOverlay) return;
+  if (resultOverlay) return resultOverlay;
 
-  resultOverlay = document.createElement("div");
-  resultOverlay.className = "result-overlay";
-  resultOverlay.innerHTML = `
-    <div class="result-card" role="dialog" aria-modal="true">
+  const wrap = document.createElement("div");
+  wrap.className = "result-overlay";
+  wrap.innerHTML = `
+    <div class="result">
       <div class="result-head">
-        <div id="rankTitle" class="result-title">評価</div>
-        <div id="resultRate" class="result-rate">--%</div>
+        <div class="result-title">RESULT</div>
+        <div class="result-close" id="resultClose">CLOSE</div>
       </div>
-
-      <div id="starsRow" class="stars" aria-label="星評価">
-        <div class="star">★</div>
-        <div class="star">★</div>
-        <div class="star">★</div>
-        <div class="star">★</div>
-        <div class="star">★</div>
-      </div>
-
-      <div id="resultSummary" class="result-summary">---</div>
-      <div id="resultDetails" class="result-details">---</div>
-      <div id="resultReview"></div>
-
-      <div class="result-actions">
-        <button id="resultRestartBtn" class="ctrl" type="button">もう一回</button>
-        <button id="resultRetryWrongBtn" class="ctrl" type="button">間違い復習</button>
-        <button id="resultCollectionBtn" class="ctrl" type="button">図鑑</button>
-        <button id="resultCloseBtn" class="ctrl" type="button">閉じる</button>
+      <div class="result-body">
+        <div class="stars" id="starsRow"></div>
+        <div class="rank" id="rankTitle"></div>
+        <div class="rate" id="rateText"></div>
+        <div class="summary" id="resultSummary"></div>
+        <div class="details" id="resultDetails"></div>
+        <div class="review" id="reviewArea"></div>
+        <div class="result-actions">
+          <button class="ra" id="resultRetryWrong">間違いだけ復習</button>
+          <button class="ra" id="resultRestart">最初から</button>
+        </div>
       </div>
     </div>
   `;
-  document.body.appendChild(resultOverlay);
+  document.body.appendChild(wrap);
+  resultOverlay = wrap;
 
-  const rankTitleEl = resultOverlay.querySelector("#rankTitle");
-  const rateEl = resultOverlay.querySelector("#resultRate");
-  const resultSummaryEl = resultOverlay.querySelector("#resultSummary");
-  const resultDetailsEl = resultOverlay.querySelector("#resultDetails");
-  const starsRow = resultOverlay.querySelector("#starsRow");
-  const reviewEl = resultOverlay.querySelector("#resultReview");
+  const resultBtnCloseEl = document.getElementById("resultClose");
+  const resultBtnRestartEl = document.getElementById("resultRestart");
+  const resultBtnRetryWrongEl = document.getElementById("resultRetryWrong");
+  const starsRow = document.getElementById("starsRow");
+  const rankTitleEl = document.getElementById("rankTitle");
+  const rateEl = document.getElementById("rateText");
+  const resultSummaryEl = document.getElementById("resultSummary");
+  const resultDetailsEl = document.getElementById("resultDetails");
+  const reviewEl = document.getElementById("reviewArea");
 
-  const resultBtnRestartEl = resultOverlay.querySelector("#resultRestartBtn");
-  const resultBtnRetryWrongEl = resultOverlay.querySelector("#resultRetryWrongBtn");
-  const resultBtnCollectionEl = resultOverlay.querySelector("#resultCollectionBtn");
-  const resultBtnCloseEl = resultOverlay.querySelector("#resultCloseBtn");
-
-  function hide() {
+  const hide = () => {
     resultOverlay.classList.remove("show");
-  }
+  };
 
-  resultOverlay.addEventListener("click", (e) => {
-    if (e.target === resultOverlay) hide();
+  wrap.addEventListener("click", (e) => {
+    if (e.target === wrap) hide();
   });
 
   if (resultBtnCloseEl) resultBtnCloseEl.addEventListener("click", hide);
@@ -945,13 +745,9 @@ function ensureResultOverlay() {
     resultBtnRetryWrongEl.addEventListener("click", async () => {
       hide();
       await unlockAudioOnce();
+      if (wrongOnlyRetried) return;
+      wrongOnlyRetried = true;
       retryWrongOnlyOnce();
-    });
-  }
-
-  if (resultBtnCollectionEl) {
-    resultBtnCollectionEl.addEventListener("click", () => {
-      window.location.href = "https://naoki496.github.io/cards-hub/";
     });
   }
 
@@ -966,27 +762,25 @@ function ensureResultOverlay() {
     if (resultDetailsEl) resultDetailsEl.innerHTML = details;
     if (reviewEl) reviewEl.innerHTML = reviewHtml;
 
-    const starEls = starsRow ? Array.from(starsRow.querySelectorAll(".star")) : [];
-    starEls.forEach((el) => el.classList.remove("on", "pop"));
+    const starEls = starsRow ? Array.from(starsRow.querySelectorAll(".st")) : [];
+    if (starsRow) starsRow.innerHTML = "";
 
-    void resultOverlay.offsetWidth;
-    resultOverlay.classList.add("show");
-
-    for (let i = 0; i < Math.min(5, stars); i++) {
-      setTimeout(() => {
-        if (starEls[i]) {
-          starEls[i].classList.add("on", "pop");
-          setTimeout(() => starEls[i].classList.remove("pop"), 140);
-        }
-      }, 120 * i);
+    for (let i = 0; i < 5; i++) {
+      const on = i < stars;
+      const s = document.createElement("div");
+      s.className = "st";
+      s.textContent = on ? "★" : "☆";
+      starsRow.appendChild(s);
     }
   };
+
+  return resultOverlay;
 }
 
 function showResultOverlay() {
   ensureResultOverlay();
 
-  // ★④対策の要：total は history.length を使う（時間切れも含む）
+  // total は history.length を使う（時間切れも含む）
   const total = (history && history.length) ? history.length : (order.length || 1);
 
   const percent = Math.round((score / total) * 100);
@@ -1036,6 +830,8 @@ function showResultOverlay() {
     reviewHtml,
     canRetryWrong: mode === "endless" ? canRetryWrong : false,
   });
+
+  resultOverlay.classList.add("show");
 }
 
 function finish() {
@@ -1052,14 +848,57 @@ function finish() {
   showResultOverlay();
 }
 
+function setMode(next) {
+  mode = next === "endless" ? "endless" : "normal";
+  StorageAdapter.set(STORAGE_KEY_LAST_MODE, mode);
+  updateModeUI();
+}
+
+async function beginFromStartScreen(opt = {}) {
+  if (opt.countdown) await runCountdown();
+  try {
+    if (startScreenEl) startScreenEl.style.display = "none";
+  } catch (_) {}
+  if (quizEl) quizEl.style.display = "";
+
+  await unlockAudioOnce();
+
+  // BGM on?
+  const bgmOn = StorageAdapter.get(STORAGE_KEY_BGM_ON) === "1";
+  setBgm(bgmOn);
+
+  startNewSession();
+}
+
+function canBeginNow() {
+  return questions && questions.length > 0;
+}
+
+// ===== Error UI =====
+function showError(e) {
+  console.error(e);
+  if (questionEl) questionEl.textContent = "エラーが発生しました。";
+  if (sublineEl) sublineEl.textContent = "";
+  if (statusEl) statusEl.textContent = String(e && e.message ? e.message : e);
+}
+
 // ===== Events =====
-choiceBtns.forEach((btn) => {
-  btn.addEventListener("click", async () => {
+if (submitBtn) {
+  submitBtn.addEventListener("click", async () => {
     await unlockAudioOnce();
-    const idx = Number(btn.dataset.idx);
-    judge(idx);
+    judge();
   });
-});
+}
+
+if (answerInput) {
+  answerInput.addEventListener("keydown", async (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      await unlockAudioOnce();
+      judge();
+    }
+  });
+}
 
 if (nextBtn) {
   nextBtn.addEventListener("click", () => {
@@ -1071,123 +910,33 @@ if (nextBtn) {
 
 if (restartBtn) {
   restartBtn.addEventListener("click", async () => {
-    try {
-      await unlockAudioOnce();
-      startNewSession();
-    } catch (e) {
-      showError(e);
-    }
-  });
-}
-
-if (bgmToggleBtn) {
-  bgmToggleBtn.addEventListener("click", async () => {
     await unlockAudioOnce();
-    await setBgm(!bgmOn);
+    startNewSession();
   });
 }
 
-if (openCollectionBtn) {
-  openCollectionBtn.addEventListener("click", () => {
-    window.location.href = "https://naoki496.github.io/cards-hub/";
-  });
-}
-
-function setMode(nextMode) {
-  mode = nextMode;
-  updateModeUI();
-}
-
-// ★ここだけ改造：開始時にカウントダウン → 自動で問題へ
-async function beginFromStartScreen({ auto = false } = {}) {
-  // カウントダウン中は操作不可
-  disableChoices(true);
-  if (nextBtn) nextBtn.disabled = true;
-
-  if (!auto) {
+if (bgmToggleEl) {
+  bgmToggleEl.addEventListener("click", async () => {
     await unlockAudioOnce();
-    await setBgm(true);
-  }
-
-  // 先に開始画面を消す（overlay が確実に見える）
-  try {
-    if (startScreenEl) startScreenEl.remove();
-  } catch (_) {
-    if (startScreenEl) startScreenEl.style.display = "none";
-  }
-
-  // カウントダウン
-  await runCountdown();
-
-  // 開始
-  startNewSession();
-
-  // URLから start=1 を消す
-  try {
-    const p = new URLSearchParams(location.search);
-    p.delete("start");
-    const next = `${location.pathname}${p.toString() ? "?" + p.toString() : ""}`;
-    history.replaceState(null, "", next);
-  } catch (_) {}
-}
-
-function canBeginNow() {
-  return startBtnEl && !startBtnEl.disabled;
+    const on = StorageAdapter.get(STORAGE_KEY_BGM_ON) === "1";
+    setBgm(!on);
+  });
 }
 
 if (modeNormalBtn) {
   modeNormalBtn.addEventListener("click", async (e) => {
-    setMode("normal");
-    if (canBeginNow()) {
-      e.preventDefault();
-      try { await beginFromStartScreen({ auto: false }); } catch (err) { console.error(err); }
-    }
+    // links already include params; no-op
   });
 }
-
 if (modeEndlessBtn) {
   modeEndlessBtn.addEventListener("click", async (e) => {
-    setMode("endless");
-    if (canBeginNow()) {
-      e.preventDefault();
-      try { await beginFromStartScreen({ auto: false }); } catch (err) { console.error(err); }
-    }
+    // links already include params; no-op
   });
-}
-
-if (startBtnEl) {
-  startBtnEl.addEventListener("click", async () => {
-    try {
-      if (!canBeginNow()) return;
-      await beginFromStartScreen({ auto: false });
-    } catch (e) {
-      console.error(e);
-      if (startNoteEl) startNoteEl.textContent = `開始に失敗しました: ${e?.message ?? e}`;
-    }
-  });
-}
-
-// ===== Error =====
-function showError(err) {
-  console.error(err);
-  stopTimer();
-
-  if (progressEl) progressEl.textContent = "読み込み失敗";
-  if (scoreEl) scoreEl.textContent = "Score: 0";
-  if (questionEl) questionEl.textContent = "CSVを読み込めませんでした。";
-  if (sublineEl) sublineEl.textContent = "";
-  if (statusEl) statusEl.textContent = `詳細: ${err?.message ?? err}`;
-  disableChoices(true);
-  if (nextBtn) nextBtn.disabled = true;
-
-  if (startBtnEl) {
-    startBtnEl.disabled = true;
-    startBtnEl.textContent = "読み込み失敗";
-  }
-  if (startNoteEl) startNoteEl.textContent = `詳細: ${err?.message ?? err}`;
 }
 
 // ===== Boot =====
+let history = [];
+
 (async function boot() {
   try {
     if (URL_MODE === "endless" || URL_MODE === "normal") setMode(URL_MODE);
@@ -1270,12 +1019,14 @@ function showError(err) {
 
     if (URL_AUTOSTART) {
       try {
-        await beginFromStartScreen({ auto: true });
+        await beginFromStartScreen({ countdown: true });
       } catch (e) {
-        console.warn("auto start failed:", e);
+        console.warn("autostart failed", e);
       }
     }
   } catch (e) {
     showError(e);
   }
+})();
+
 })();
