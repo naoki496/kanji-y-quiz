@@ -1,13 +1,14 @@
-// app.js  (RECOVERY BUILD 2026-02-11)
-// 目的：bootが途中で止まらない／エラーを画面に出す／通常10問＋10秒タイマー＋タイムバー＋入力式
+// app.js  (KANJI-Y QUIZ UI+SOUND BUILD 2026-02-11)
+// 仕様：入力式（読み） / 通常10問 / 連続学習（全問） / タイマー15秒+バー
+// BGM/SE：開始時ON（メニュークリック起点で確実に鳴る。start=1自動開始は環境により鳴らない場合あり）
 
 const TOTAL_QUESTIONS = 10;
 
 // ===== Timer settings =====
-const QUESTION_TIME_SEC = 10; // ★このアプリは10秒
+const QUESTION_TIME_SEC = 15; // ★15秒
 const WARN_AT_SEC = 3;        // 残り3秒で軽い発光
 
-// Audio（存在しなくても起動は止めない）
+// ===== Audio =====
 const AUDIO_FILES = {
   bgm: "./assets/bgm.mp3",
   correct: "./assets/correct.mp3",
@@ -15,8 +16,7 @@ const AUDIO_FILES = {
   go: "./assets/go.mp3",
 };
 
-// ===== Storage keys =====
-const STORAGE_KEY_BGM_ON = "bungakusiQuiz.v1.bgmOn";
+const STORAGE_KEY_BGM_ON = "kanjiYQuiz.v1.bgmOn";
 
 // ===== URL Params =====
 const URLP = new URLSearchParams(location.search);
@@ -24,7 +24,7 @@ const URL_MODE = URLP.get("mode");               // normal | endless
 const URL_AUTOSTART = URLP.get("start") === "1"; // start=1
 const URL_DEBUG = URLP.get("debug") === "1";     // debug=1
 
-// ===== DOM (存在しなくても落とさない) =====
+// ===== DOM =====
 const progressEl = document.getElementById("progress");
 const scoreEl = document.getElementById("score");
 const questionEl = document.getElementById("question");
@@ -43,7 +43,6 @@ const quizEl = document.getElementById("quiz");
 const bgmToggleBtn = document.getElementById("bgmToggle");
 const modePillEl = document.getElementById("modePill");
 
-// Start Screen
 const startScreenEl = document.getElementById("startScreen");
 const startNoteEl = document.getElementById("startNote");
 const modeNormalBtn = document.getElementById("modeNormalBtn");
@@ -55,7 +54,6 @@ function uiLog(msg) {
   if (progressEl) progressEl.textContent = s;
   if (statusEl) statusEl.textContent = s;
   if (startNoteEl) {
-    // debug=1 の時だけ見えるように
     if (URL_DEBUG) {
       startNoteEl.classList.remove("start-hidden");
       startNoteEl.style.display = "block";
@@ -63,15 +61,13 @@ function uiLog(msg) {
     startNoteEl.textContent = s;
   }
 }
-
-window.addEventListener("error", (e) => {
-  uiLog("JS ERROR: " + (e?.message || "unknown"));
-});
+window.addEventListener("error", (e) => uiLog("JS ERROR: " + (e?.message || "unknown")));
 window.addEventListener("unhandledrejection", (e) => {
   const r = e?.reason;
   uiLog("PROMISE REJECTION: " + (r?.message || String(r || "unknown")));
 });
 
+// ===== Utils =====
 function escapeHtml(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -90,6 +86,7 @@ function normalizeYomi(raw) {
     .replace(/[\s\u3000]+/g, "")
     .replace(/[・。、「」、,.．]/g, "")
     .replace(/[ー－−–—]/g, "");
+  // カタカナ→ひらがな
   return s1.replace(/[ァ-ン]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 function shuffle(arr) {
@@ -107,12 +104,22 @@ function setMode(next) {
   if (modePillEl) modePillEl.textContent = mode === "endless" ? "連続学習" : "通常（10問）";
 }
 
-// ===== Audio (起動停止させない) =====
+// ===== Audio implementation =====
 const bgmAudio = new Audio(AUDIO_FILES.bgm);
 bgmAudio.loop = true;
 bgmAudio.volume = 0.25;
 
+const seGo = new Audio(AUDIO_FILES.go);
+seGo.volume = 0.6;
+const seCorrect = new Audio(AUDIO_FILES.correct);
+seCorrect.volume = 0.7;
+const seWrong = new Audio(AUDIO_FILES.wrong);
+seWrong.volume = 0.7;
+
+let audioUnlocked = false;
+
 function safePlay(a) {
+  try { a.currentTime = 0; } catch (_) {}
   try {
     const p = a.play();
     if (p && typeof p.catch === "function") p.catch(() => {});
@@ -122,8 +129,35 @@ function safePause(a) {
   try { a.pause(); } catch (_) {}
 }
 
+// ユーザー操作起点で「解錠」する（これが無いとBGM/SEが鳴らない端末がある）
+function unlockAudioOnceFromGesture() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+
+  // awaitしない：環境によって保留されるため
+  try {
+    const p = bgmAudio.play();
+    if (p && typeof p.then === "function") {
+      p.then(() => {
+        try { bgmAudio.pause(); bgmAudio.currentTime = 0; } catch (_) {}
+      }).catch(() => {});
+    }
+  } catch (_) {}
+
+  // SEの解錠（鳴らなくてもOK）
+  try { safePlay(seGo); safePause(seGo); } catch (_) {}
+  try { safePlay(seCorrect); safePause(seCorrect); } catch (_) {}
+  try { safePlay(seWrong); safePause(seWrong); } catch (_) {}
+}
+
 function loadBgmOn() {
-  try { return localStorage.getItem(STORAGE_KEY_BGM_ON) === "1"; } catch { return false; }
+  try {
+    const v = localStorage.getItem(STORAGE_KEY_BGM_ON);
+    if (v === null) return true; // ★初期はON
+    return v === "1";
+  } catch {
+    return true;
+  }
 }
 function saveBgmOn(on) {
   try { localStorage.setItem(STORAGE_KEY_BGM_ON, on ? "1" : "0"); } catch (_) {}
@@ -158,24 +192,14 @@ async function runCountdown() {
     numEl.classList.remove("pop");
     void numEl.offsetWidth;
     numEl.classList.add("pop");
+
+    if (t === "GO") safePlay(seGo);
     await new Promise((r) => setTimeout(r, 850));
   }
   overlay.style.display = "none";
 }
 
-// ===== Result Overlay (存在しないと落ちるので必ず用意) =====
-let resultOverlay = null;
-function ensureResultOverlay() {
-  if (resultOverlay) return resultOverlay;
-  const el = document.createElement("div");
-  el.id = "resultOverlay";
-  el.style.display = "none";
-  document.body.appendChild(el);
-  resultOverlay = el;
-  return el;
-}
-
-// ===== Timer UI (CSS側で見た目) =====
+// ===== Timer UI =====
 let timerOuterEl = null;
 let timerInnerEl = null;
 let timerTextEl = null;
@@ -230,7 +254,7 @@ function startTimerForQuestion(onTimeout) {
     if (timerInnerEl) {
       timerInnerEl.style.width = `${(remain / totalMs) * 100}%`;
       timerInnerEl.style.filter = (remain <= WARN_AT_SEC * 1000)
-        ? "drop-shadow(0 0 12px rgba(255,61,207,0.55))"
+        ? "drop-shadow(0 0 14px rgba(255,61,207,0.75))"
         : "none";
     }
 
@@ -253,7 +277,6 @@ let score = 0;
 let combo = 0;
 let maxCombo = 0;
 let locked = false;
-let history = [];
 
 // ===== UI =====
 function updateScoreUI() {
@@ -306,12 +329,11 @@ function render() {
   if (nextBtn) nextBtn.disabled = true;
 
   locked = false;
-
   startTimerForQuestion(() => onTimeUp());
 }
 
 function startWithPool(pool) {
-  score = 0; index = 0; combo = 0; maxCombo = 0; history = [];
+  score = 0; index = 0; combo = 0; maxCombo = 0;
   const shuffled = shuffle([...pool]);
 
   order = (mode === "endless")
@@ -320,10 +342,7 @@ function startWithPool(pool) {
 
   render();
 }
-
-function startNewSession() {
-  startWithPool(questions);
-}
+function startNewSession() { startWithPool(questions); }
 
 function onTimeUp() {
   if (locked) return;
@@ -331,12 +350,12 @@ function onTimeUp() {
   disableInput(true);
 
   const q = order[index];
-  history.push({ q, inputRaw: answerInput ? answerInput.value : "", isCorrect: false, isTimeUp: true });
   combo = 0;
 
   if (answerInput) answerInput.classList.add("wrong");
   if (statusEl) statusEl.textContent = `TIME UP（正解：${q.answer}）`;
 
+  safePlay(seWrong);
   if (nextBtn) nextBtn.disabled = false;
 }
 
@@ -356,18 +375,19 @@ function judge() {
     .filter(Boolean);
 
   const isCorrect = input.length > 0 && candidates.includes(input);
-  history.push({ q, inputRaw, isCorrect, isTimeUp: false });
 
   if (isCorrect) {
     score++;
     combo++;
     if (combo > maxCombo) maxCombo = combo;
     if (statusEl) statusEl.textContent = "正解";
-    if (answerInput) answerInput.classList.add("correct"); // ★入力欄を正解色発光
+    if (answerInput) answerInput.classList.add("correct");
+    safePlay(seCorrect);
   } else {
     combo = 0;
     if (statusEl) statusEl.textContent = `不正解（正解：${q.answer}）`;
     if (answerInput) answerInput.classList.add("wrong");
+    safePlay(seWrong);
   }
 
   updateScoreUI();
@@ -376,16 +396,18 @@ function judge() {
 }
 
 // ===== Start flow =====
-async function begin(auto) {
-  // start=1 でも必ず開始できるよう、音声のunlock待ちには依存しない
+async function beginFromMenuGesture() {
+  unlockAudioOnceFromGesture(); // ★ここが音の肝（クリック起点）
   if (startScreenEl) startScreenEl.style.display = "none";
-
-  // countdown
+  setBgm(true);                // ★開始時ON
   await runCountdown();
-
-  // BGMは保存状態だけ反映（再生はユーザー操作後にONできる）
-  setBgm(loadBgmOn());
-
+  startNewSession();
+}
+async function beginAutoStart() {
+  if (startScreenEl) startScreenEl.style.display = "none";
+  if (bgmToggleBtn) bgmToggleBtn.textContent = loadBgmOn() ? "BGM: ON" : "BGM: OFF";
+  await runCountdown();
+  setBgm(loadBgmOn()); // 規制で鳴らない場合あり（停止はしない）
   startNewSession();
 }
 
@@ -394,39 +416,36 @@ if (submitBtn) submitBtn.addEventListener("click", () => judge());
 if (answerInput) answerInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); judge(); }
 });
-
 if (nextBtn) nextBtn.addEventListener("click", () => {
   if (index >= order.length - 1) {
-    // 終了（結果UIは別ターンで復元してもOK：今は止めない）
     if (statusEl) statusEl.textContent = "終了";
+    stopTimer();
     return;
   }
   index++;
   render();
 });
-
 if (restartBtn) restartBtn.addEventListener("click", () => {
   stopTimer();
   startNewSession();
 });
-
 if (bgmToggleBtn) bgmToggleBtn.addEventListener("click", () => {
-  // ユーザー操作で初めて再生できる
+  unlockAudioOnceFromGesture();
   const next = !loadBgmOn();
   setBgm(next);
 });
 
-// Start menu: 見た目は <a> のまま、クリックでその場開始（ジェスチャー保持）
+// Start menu
 if (modeNormalBtn) modeNormalBtn.addEventListener("click", async (e) => {
   try { e.preventDefault(); } catch(_) {}
   setMode("normal");
-  await begin(false);
+  await beginFromMenuGesture();
   try { history.replaceState(null, "", "./index.html?mode=normal&start=1"); } catch(_) {}
 });
 if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
   try { e.preventDefault(); } catch(_) {}
   setMode("endless");
-  await begin(false);
+  await beginFromMenuGesture();
   try { history.replaceState(null, "", "./index.html?mode=endless&start=1"); } catch(_) {}
 });
 
@@ -434,9 +453,9 @@ if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
 (async function boot() {
   try {
     uiLog("BOOT: start");
-
     setMode(URL_MODE === "endless" ? "endless" : "normal");
-    ensureResultOverlay(); // 未定義事故を防止（使わなくてもOK）
+
+    if (bgmToggleBtn) bgmToggleBtn.textContent = loadBgmOn() ? "BGM: ON" : "BGM: OFF";
 
     if (!window.CSVUtil || typeof window.CSVUtil.load !== "function") {
       throw new Error("CSVUtil が見つかりません（csv.js の読み込み確認）");
@@ -447,9 +466,9 @@ if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
     const csvUrl = new URL("questions.csv", baseUrl).toString();
     const raw = await window.CSVUtil.load(csvUrl);
     questions = raw.map(normalizeRow);
+
     uiLog(`BOOT: ready (questions=${questions.length})`);
 
-    // 待機表示
     disableInput(true);
     ensureTimerUI();
     if (timerTextEl) timerTextEl.textContent = `${QUESTION_TIME_SEC.toFixed(0)}.0s`;
@@ -457,10 +476,7 @@ if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
 
     if (questionEl) questionEl.textContent = "始めたいメニューを選んでください。";
 
-    if (URL_AUTOSTART) {
-      // auto開始（遷移後でも動く）
-      await begin(true);
-    }
+    if (URL_AUTOSTART) await beginAutoStart();
   } catch (e) {
     uiLog("BOOT FAILED: " + (e?.message ?? e));
   }
