@@ -142,6 +142,39 @@ const URLP = new URLSearchParams(location.search);
 const URL_MODE = URLP.get("mode");               // "normal" | "endless" | null
 const URL_AUTOSTART = URLP.get("start") === "1"; // true/false
 
+const URL_DEBUG = URLP.get("debug") === "1"; // ?debug=1 で画面内に診断表示
+
+function dbg(msg) {
+  if (!URL_DEBUG) return;
+  try {
+    // startNote は index 側で start-hidden だが、debug=1 のときだけ表示させる
+    if (startNoteEl) {
+      startNoteEl.classList.remove("start-hidden");
+      startNoteEl.style.display = "block";
+      startNoteEl.style.marginTop = "10px";
+      startNoteEl.style.fontSize = "12px";
+      startNoteEl.style.lineHeight = "1.4";
+      startNoteEl.style.color = "rgba(255,255,255,0.78)";
+      startNoteEl.style.textAlign = "center";
+      startNoteEl.textContent = msg;
+    }
+    if (statusEl) statusEl.textContent = msg;
+    if (progressEl) progressEl.textContent = msg;
+  } catch (_) {}
+}
+
+function hookGlobalErrors() {
+  if (!URL_DEBUG) return;
+  window.addEventListener("error", (e) => {
+    const m = e?.message || "error";
+    dbg("JS ERROR: " + m);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const m = (e?.reason && (e.reason.message || String(e.reason))) || "rejection";
+    dbg("PROMISE REJECTION: " + m);
+  });
+}
+
 // ===== Audio objects =====
 const bgmAudio = new Audio(AUDIO_FILES.bgm);
 bgmAudio.loop = true;
@@ -777,6 +810,7 @@ function retryWrongOnlyOnce() {
   const wrong = history.filter((h) => !h.isCorrect).map((h) => h.q);
   if (!wrong.length) {
     startNewSession();
+  dbg('BEGIN: session started');
     return;
   }
   startWithPool(wrong);
@@ -998,6 +1032,7 @@ if (restartBtn) {
     try {
       await unlockAudioOnce();
       startNewSession();
+  dbg('BEGIN: session started');
     } catch (e) {
       showError(e);
     }
@@ -1038,13 +1073,17 @@ async function beginFromStartScreen({ auto = false } = {}) {
     if (startScreenEl) startScreenEl.remove();
   } catch (_) {
     if (startScreenEl) startScreenEl.style.display = "none";
+  dbg('BEGIN: startScreen hidden');
   }
 
   // カウントダウン
+  dbg('BEGIN: countdown');
   await runCountdown();
+  dbg('BEGIN: countdown done');
 
   // 開始
   startNewSession();
+  dbg('BEGIN: session started');
 
   // URLから start=1 を消す
   try {
@@ -1113,10 +1152,13 @@ function showError(err) {
 
 // ===== Boot =====
 (async function boot() {
+  hookGlobalErrors();
+  dbg('BOOT: start');
   try {
     if (URL_MODE === "endless" || URL_MODE === "normal") setMode(URL_MODE);
     else setMode("normal");
 
+    dbg('BOOT: checking CSVUtil');
     if (!window.CSVUtil || typeof window.CSVUtil.load !== "function") {
       throw new Error("CSVUtil が見つかりません（csv.js の読み込み順/内容を確認）");
     }
@@ -1133,12 +1175,17 @@ function showError(err) {
       startBtnEl.textContent = "読み込み中…";
     }
 
+    dbg('BOOT: loading questions.csv ...');
     const raw = await window.CSVUtil.load(csvUrl);
+    dbg('BOOT: questions.csv loaded');
     questions = raw.map(normalizeRow);
+    dbg(`BOOT: normalized questions = ${questions.length}`);
 
     try {
       const cardsUrl = new URL("cards.csv", baseUrl).toString();
+      dbg('BOOT: loading cards.csv ...');
       const rawCards = await window.CSVUtil.load(cardsUrl);
+      dbg('BOOT: cards.csv loaded');
 
       const nextCards = [];
       for (const r of rawCards) {
@@ -1193,11 +1240,13 @@ function showError(err) {
     ensureResultOverlay();
     wireStartMenu();
 
+    dbg('BOOT: ready');
+
     if (URL_AUTOSTART) {
       try {
         await beginFromStartScreen({ auto: true });
       } catch (e) {
-        console.warn("auto start failed:", e);
+        dbg('AUTO-START failed: ' + (e?.message ?? e));
       }
     }
   } catch (e) {
