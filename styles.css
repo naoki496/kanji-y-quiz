@@ -3,20 +3,20 @@
   --bg0: #050405;   /* メイン背景（ほぼ黒） */
   --bg1: #0c0907;   /* パネル・カード用 */
 
-  /* ===== Accent (Pink) ===== */
-  --accent1: #ff3dcf; /* ネオンピンク */
-  --accent2: #ff1493; /* ディープピンク */
+  /* ===== Accent (Amber) ===== */
+  --accent1: #ffb300; /* メインアンバー */
+  --accent2: #ff8f00; /* 濃いアンバー */
 
   /* ===== Text ===== */
   --text: #ffffff;
   --text-sub: rgba(255,255,255,0.65);
 
   /* ===== Glow ===== */
-  --glow: rgba(255,61,207,0.22);
-  --glow-strong: rgba(255,61,207,0.45);
+  --glow: rgba(255,179,0,0.22);
+  --glow-strong: rgba(255,179,0,0.45);
 
   /* ===== Border ===== */
-  --border: rgba(255,61,207,0.35);
+  --border: rgba(255,179,0,0.35);
 }
 
 
@@ -315,34 +315,6 @@ h1{
   cursor:pointer;
   box-shadow: 0 0 18px var(--glow), inset 0 0 0 1px rgba(255,255,255,0.04);
   transition: transform 80ms ease, box-shadow 120ms ease, border-color 120ms ease;
-}
-
-
-/* ===== Input mode (Yomi) ===== */
-.answer-input{
-  width: 100%;
-  margin: 10px 0;
-  padding: 16px 14px;
-  border-radius: 18px;
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,0.04);
-  color:#fff;
-  font-size: 18px;
-  outline: none;
-  box-shadow: 0 0 18px var(--glow), inset 0 0 0 1px rgba(255,255,255,0.04);
-}
-
-.answer-input::placeholder{
-  color: rgba(255,255,255,0.55);
-}
-
-.answer-input:focus{
-  border-color: rgba(255,61,207,0.65);
-  box-shadow: 0 0 26px var(--glow-strong), inset 0 0 0 1px rgba(255,255,255,0.06);
-}
-
-.choice.submit{
-  text-align:center;
 }
 
 .choice:active{
@@ -1057,4 +1029,78 @@ h1{
 @keyframes cdPop{
   0%{ transform: scale(.85); filter: blur(.6px); opacity: .7; }
   100%{ transform: scale(1); filter: blur(0); opacity: 1; }
+}
+
+
+/* ===== Timer (10s) ===== */
+#timerArea{
+  padding: 6px 6px 10px;
+}
+#timerText{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:8px;
+  font-size:12px;
+  color: rgba(255,255,255,0.65);
+  margin-bottom:8px;
+}
+#timerOuter{
+  width:100%;
+  height:10px;
+  border-radius:999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.05);
+  overflow:hidden;
+}
+#timerInner{
+  height:100%;
+  width:100%;
+  background: linear-gradient(90deg, rgba(255,61,207,0.85), rgba(255,20,147,0.9));
+  box-shadow: 0 0 14px rgba(255,61,207,0.35);
+}
+
+/* ===== Answer input feedback ===== */
+.answer-input.correct{
+  border-color: rgba(0,255,170,0.75) !important;
+  box-shadow: 0 0 26px rgba(0,255,170,0.28), inset 0 0 0 1px rgba(255,255,255,0.06) !important;
+}
+.answer-input.wrong{
+  border-color: rgba(255,80,120,0.75) !important;
+  box-shadow: 0 0 26px rgba(255,80,120,0.24), inset 0 0 0 1px rgba(255,255,255,0.06) !important;
+}
+
+/* ===== Countdown (restore richer look) ===== */
+#countdownOverlay{
+  position: fixed;
+  inset: 0;
+  display: none; /* JS sets flex */
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  background:
+    radial-gradient(900px 600px at 50% 35%, rgba(255,61,207,0.20), transparent 60%),
+    rgba(0,0,0,0.62);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+#countdownOverlay .countdown-num{
+  font-size: 104px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  color: #fff;
+  text-shadow:
+    0 0 14px rgba(255,61,207,0.35),
+    0 0 34px rgba(255,61,207,0.55),
+    0 0 60px rgba(255,20,147,0.35);
+  filter: drop-shadow(0 0 18px rgba(255,61,207,0.35));
+  transform: translateZ(0);
+}
+#countdownOverlay .countdown-num.pop{
+  animation: cdPop .85s ease both;
+}
+@keyframes cdPop{
+  0%   { transform: scale(0.88); opacity: 0.0; }
+  18%  { transform: scale(1.00); opacity: 1.0; }
+  100% { transform: scale(1.10); opacity: 0.0; }
 }
