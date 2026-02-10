@@ -1191,6 +1191,7 @@ function showError(err) {
     }
 
     ensureResultOverlay();
+    wireStartMenu();
 
     if (URL_AUTOSTART) {
       try {
