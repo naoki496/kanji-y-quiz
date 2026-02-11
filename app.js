@@ -1,12 +1,15 @@
-// app.js  (KANJI-Y QUIZ UI+SOUND BUILD 2026-02-11)
-// 仕様：入力式（読み） / 通常10問 / 連続学習（全問） / タイマー15秒+バー
-// BGM/SE：開始時ON（メニュークリック起点で確実に鳴る。start=1自動開始は環境により鳴らない場合あり）
+// app.js  (KANJI-Y QUIZ STABLE BUILD 2026-02-11)
+// 入力式（読み） / 通常10問 / 連続学習（全問） / タイマー15秒+バー
+// 黒背景+ピンク発光（CSS側）
+// BGM：開始クリック起点で確実にON再生（解錠処理ではBGMを触らない）
+// SE：GO/正解/不正解/TIMEUP（wrong）
+// 失敗時：コンソール無しでも画面にエラー表示
 
 const TOTAL_QUESTIONS = 10;
 
 // ===== Timer settings =====
-const QUESTION_TIME_SEC = 15; // ★15秒
-const WARN_AT_SEC = 3;        // 残り3秒で軽い発光
+const QUESTION_TIME_SEC = 15;
+const WARN_AT_SEC = 3;
 
 // ===== Audio =====
 const AUDIO_FILES = {
@@ -48,16 +51,13 @@ const startNoteEl = document.getElementById("startNote");
 const modeNormalBtn = document.getElementById("modeNormalBtn");
 const modeEndlessBtn = document.getElementById("modeEndlessBtn");
 
-// ===== Debug / error surface =====
+// ===== Error surface =====
 function uiLog(msg) {
   const s = String(msg ?? "");
-  if (progressEl) progressEl.textContent = s;
   if (statusEl) statusEl.textContent = s;
-  if (startNoteEl) {
-    if (URL_DEBUG) {
-      startNoteEl.classList.remove("start-hidden");
-      startNoteEl.style.display = "block";
-    }
+  if (URL_DEBUG && startNoteEl) {
+    startNoteEl.classList.remove("start-hidden");
+    startNoteEl.style.display = "block";
     startNoteEl.textContent = s;
   }
 }
@@ -104,7 +104,7 @@ function setMode(next) {
   if (modePillEl) modePillEl.textContent = mode === "endless" ? "連続学習" : "通常（10問）";
 }
 
-// ===== Audio implementation =====
+// ===== Audio core =====
 const bgmAudio = new Audio(AUDIO_FILES.bgm);
 bgmAudio.loop = true;
 bgmAudio.volume = 0.25;
@@ -129,19 +129,11 @@ function safePause(a) {
   try { a.pause(); } catch (_) {}
 }
 
+// ★重要：解錠ではBGMを触らない（“後からpauseされる”事故を防ぐ）
 function unlockAudioOnceFromGesture() {
   if (audioUnlocked) return;
   audioUnlocked = true;
 
-  // BGMはここでは触らない（←これが重要。後からpauseされる事故を防ぐ）
-
-  // SEだけ“解錠”する（失敗してもOK）
-  try { safePlay(seGo); safePause(seGo); } catch (_) {}
-  try { safePlay(seCorrect); safePause(seCorrect); } catch (_) {}
-  try { safePlay(seWrong); safePause(seWrong); } catch (_) {}
-}
-
-  // SEの解錠（鳴らなくてもOK）
   try { safePlay(seGo); safePause(seGo); } catch (_) {}
   try { safePlay(seCorrect); safePause(seCorrect); } catch (_) {}
   try { safePlay(seWrong); safePause(seWrong); } catch (_) {}
@@ -150,7 +142,7 @@ function unlockAudioOnceFromGesture() {
 function loadBgmOn() {
   try {
     const v = localStorage.getItem(STORAGE_KEY_BGM_ON);
-    if (v === null) return true; // ★初期はON
+    if (v === null) return true; // 初期はON
     return v === "1";
   } catch {
     return true;
@@ -160,10 +152,10 @@ function saveBgmOn(on) {
   try { localStorage.setItem(STORAGE_KEY_BGM_ON, on ? "1" : "0"); } catch (_) {}
 }
 function setBgm(on) {
+  saveBgmOn(on);
+  if (bgmToggleBtn) bgmToggleBtn.textContent = on ? "BGM: ON" : "BGM: OFF";
   if (on) safePlay(bgmAudio);
   else safePause(bgmAudio);
-  if (bgmToggleBtn) bgmToggleBtn.textContent = on ? "BGM: ON" : "BGM: OFF";
-  saveBgmOn(on);
 }
 
 // ===== Countdown Overlay =====
@@ -189,7 +181,6 @@ async function runCountdown() {
     numEl.classList.remove("pop");
     void numEl.offsetWidth;
     numEl.classList.add("pop");
-
     if (t === "GO") safePlay(seGo);
     await new Promise((r) => setTimeout(r, 850));
   }
@@ -232,7 +223,6 @@ function stopTimer() {
   if (timerRAF) cancelAnimationFrame(timerRAF);
   timerRAF = 0;
 }
-
 function startTimerForQuestion(onTimeout) {
   ensureTimerUI();
   stopTimer();
@@ -250,9 +240,8 @@ function startTimerForQuestion(onTimeout) {
     if (timerTextEl) timerTextEl.textContent = `${(remain / 1000).toFixed(1)}s`;
     if (timerInnerEl) {
       timerInnerEl.style.width = `${(remain / totalMs) * 100}%`;
-      timerInnerEl.style.filter = (remain <= WARN_AT_SEC * 1000)
-        ? "drop-shadow(0 0 14px rgba(255,61,207,0.75))"
-        : "none";
+      timerInnerEl.style.filter =
+        remain <= WARN_AT_SEC * 1000 ? "drop-shadow(0 0 14px rgba(255,61,207,0.75))" : "none";
     }
 
     if (remain <= 0) {
@@ -298,12 +287,13 @@ function normalizeRow(r) {
     question: String(r.question ?? "").trim(),
     source: String(r.source ?? "").trim(),
     answer: String(r.answer ?? "").trim(),
-    alt: String(r.alt ?? "").trim(),
+    alt: String(r.alt ?? "").trim(), // 「|」区切りで別解
   };
 }
 
 function render() {
   const q = order[index];
+
   if (progressEl) progressEl.textContent = `第${index + 1}問 / ${order.length}`;
   updateScoreUI();
   updateMeterUI();
@@ -330,16 +320,22 @@ function render() {
 }
 
 function startWithPool(pool) {
-  score = 0; index = 0; combo = 0; maxCombo = 0;
-  const shuffled = shuffle([...pool]);
+  score = 0;
+  index = 0;
+  combo = 0;
+  maxCombo = 0;
 
-  order = (mode === "endless")
-    ? shuffled
-    : shuffled.slice(0, Math.min(TOTAL_QUESTIONS, shuffled.length));
+  const shuffled = shuffle([...pool]);
+  order =
+    mode === "endless"
+      ? shuffled
+      : shuffled.slice(0, Math.min(TOTAL_QUESTIONS, shuffled.length));
 
   render();
 }
-function startNewSession() { startWithPool(questions); }
+function startNewSession() {
+  startWithPool(questions);
+}
 
 function onTimeUp() {
   if (locked) return;
@@ -377,11 +373,13 @@ function judge() {
     score++;
     combo++;
     if (combo > maxCombo) maxCombo = combo;
+
     if (statusEl) statusEl.textContent = "正解";
     if (answerInput) answerInput.classList.add("correct");
     safePlay(seCorrect);
   } else {
     combo = 0;
+
     if (statusEl) statusEl.textContent = `不正解（正解：${q.answer}）`;
     if (answerInput) answerInput.classList.add("wrong");
     safePlay(seWrong);
@@ -394,21 +392,23 @@ function judge() {
 
 // ===== Start flow =====
 async function beginFromMenuGesture() {
+  // ここが「ユーザー操作起点」
   unlockAudioOnceFromGesture();
+
   if (startScreenEl) startScreenEl.style.display = "none";
 
-  setBgm(true);          // ON表示＋保存
-  safePlay(bgmAudio);    // 念押しで鳴らす
+  // ★開始時BGM ON（クリック直後にplay）
+  setBgm(true);
 
   await runCountdown();
   startNewSession();
 }
 
 async function beginAutoStart() {
+  // 自動開始は音が鳴らない端末がある（規制）ので、状態だけ合わせる
   if (startScreenEl) startScreenEl.style.display = "none";
-  if (bgmToggleBtn) bgmToggleBtn.textContent = loadBgmOn() ? "BGM: ON" : "BGM: OFF";
+  setBgm(loadBgmOn());
   await runCountdown();
-  setBgm(loadBgmOn()); // 規制で鳴らない場合あり（停止はしない）
   startNewSession();
 }
 
@@ -417,6 +417,7 @@ if (submitBtn) submitBtn.addEventListener("click", () => judge());
 if (answerInput) answerInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); judge(); }
 });
+
 if (nextBtn) nextBtn.addEventListener("click", () => {
   if (index >= order.length - 1) {
     if (statusEl) statusEl.textContent = "終了";
@@ -426,17 +427,19 @@ if (nextBtn) nextBtn.addEventListener("click", () => {
   index++;
   render();
 });
+
 if (restartBtn) restartBtn.addEventListener("click", () => {
   stopTimer();
   startNewSession();
 });
+
 if (bgmToggleBtn) bgmToggleBtn.addEventListener("click", () => {
   unlockAudioOnceFromGesture();
   const next = !loadBgmOn();
   setBgm(next);
 });
 
-// Start menu
+// Start menu（見た目は<a>のまま、クリックで開始）
 if (modeNormalBtn) modeNormalBtn.addEventListener("click", async (e) => {
   try { e.preventDefault(); } catch(_) {}
   setMode("normal");
@@ -456,6 +459,7 @@ if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
     uiLog("BOOT: start");
     setMode(URL_MODE === "endless" ? "endless" : "normal");
 
+    // 初期表示
     if (bgmToggleBtn) bgmToggleBtn.textContent = loadBgmOn() ? "BGM: ON" : "BGM: OFF";
 
     if (!window.CSVUtil || typeof window.CSVUtil.load !== "function") {
@@ -466,7 +470,9 @@ if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
     const baseUrl = new URL("./", location.href).toString();
     const csvUrl = new URL("questions.csv", baseUrl).toString();
     const raw = await window.CSVUtil.load(csvUrl);
+
     questions = raw.map(normalizeRow);
+    if (!questions.length) throw new Error("questions.csv が空です");
 
     uiLog(`BOOT: ready (questions=${questions.length})`);
 
