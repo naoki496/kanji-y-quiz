@@ -397,12 +397,23 @@ function judge() {
 
 // ===== Start flow =====
 async function beginFromMenuGesture() {
-  unlockAudioOnceFromGesture(); // ★ここが音の肝（クリック起点）
+  unlockAudioOnceFromGesture();
+
   if (startScreenEl) startScreenEl.style.display = "none";
-  setBgm(true);                // ★開始時ON
+
+  // ★ここが肝：クリック直後に play を確定させる（await の前）
+  saveBgmOn(true);
+  if (bgmToggleBtn) bgmToggleBtn.textContent = "BGM: ON";
+
+  // ここで必ず鳴らす（失敗しても止めない）
+  safePlay(bgmAudio);
+
+  // （GO音の方が先に鳴っても良いならこのまま）
   await runCountdown();
+
   startNewSession();
 }
+
 async function beginAutoStart() {
   if (startScreenEl) startScreenEl.style.display = "none";
   if (bgmToggleBtn) bgmToggleBtn.textContent = loadBgmOn() ? "BGM: ON" : "BGM: OFF";
