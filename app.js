@@ -129,20 +129,17 @@ function safePause(a) {
   try { a.pause(); } catch (_) {}
 }
 
-// ユーザー操作起点で「解錠」する（これが無いとBGM/SEが鳴らない端末がある）
 function unlockAudioOnceFromGesture() {
   if (audioUnlocked) return;
   audioUnlocked = true;
 
-  // awaitしない：環境によって保留されるため
-  try {
-    const p = bgmAudio.play();
-    if (p && typeof p.then === "function") {
-      p.then(() => {
-        try { bgmAudio.pause(); bgmAudio.currentTime = 0; } catch (_) {}
-      }).catch(() => {});
-    }
-  } catch (_) {}
+  // BGMはここでは触らない（←これが重要。後からpauseされる事故を防ぐ）
+
+  // SEだけ“解錠”する（失敗してもOK）
+  try { safePlay(seGo); safePause(seGo); } catch (_) {}
+  try { safePlay(seCorrect); safePause(seCorrect); } catch (_) {}
+  try { safePlay(seWrong); safePause(seWrong); } catch (_) {}
+}
 
   // SEの解錠（鳴らなくてもOK）
   try { safePlay(seGo); safePause(seGo); } catch (_) {}
@@ -398,19 +395,12 @@ function judge() {
 // ===== Start flow =====
 async function beginFromMenuGesture() {
   unlockAudioOnceFromGesture();
-
   if (startScreenEl) startScreenEl.style.display = "none";
 
-  // ★ここが肝：クリック直後に play を確定させる（await の前）
-  saveBgmOn(true);
-  if (bgmToggleBtn) bgmToggleBtn.textContent = "BGM: ON";
+  setBgm(true);          // ON表示＋保存
+  safePlay(bgmAudio);    // 念押しで鳴らす
 
-  // ここで必ず鳴らす（失敗しても止めない）
-  safePlay(bgmAudio);
-
-  // （GO音の方が先に鳴っても良いならこのまま）
   await runCountdown();
-
   startNewSession();
 }
 
