@@ -97,6 +97,134 @@ function shuffle(arr) {
   return arr;
 }
 
+// ===== Card Reward (kobun/bungakusi compatible) =====
+let cardsAll = [];
+let cardPoolByRarity = { 3: [], 4: [], 5: [] };
+
+// ✅ cards-hub と統一
+const STORAGE_KEY_CARD_COUNTS = "hklobby.v1.cardCounts";
+// ✅ 旧キー救済（将来の移行用・現状未使用でもOK）
+const LEGACY_KEY_CARD_COUNTS = "kanjiYQuiz.v1.cardCounts";
+
+function normalizeCardRow(r) {
+  // cards.csv: id, rarity, name, img, wiki, weight
+  const id = String(r.id ?? "").trim();
+  const rarity = Number(r.rarity);
+  const name = String(r.name ?? "").trim();
+  const img = String(r.img ?? "").trim();
+  const wiki = String(r.wiki ?? "").trim();
+  const weightRaw = r.weight ?? "";
+  const weight = Number(weightRaw) || 1;
+  return { id, rarity, name, img, wiki, weight };
+}
+
+function rebuildCardPoolsFromCsv() {
+  const next = { 3: [], 4: [], 5: [] };
+  if (!Array.isArray(cardsAll)) cardsAll = [];
+  for (const c of cardsAll) {
+    if (!c || !c.id) continue;
+    if (c.rarity === 3 || c.rarity === 4 || c.rarity === 5) next[c.rarity].push(c);
+  }
+  cardPoolByRarity = next;
+}
+
+function loadCardCounts() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CARD_COUNTS);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" ? obj : {};
+  } catch {
+    return {};
+  }
+}
+function saveCardCounts(counts) {
+  try { localStorage.setItem(STORAGE_KEY_CARD_COUNTS, JSON.stringify(counts)); } catch (_) {}
+}
+
+function recordCard(card) {
+  const counts = loadCardCounts();
+  counts[card.id] = (counts[card.id] ?? 0) + 1;
+  saveCardCounts(counts);
+  return counts[card.id];
+}
+
+function pickWeighted(arr, getWeight) {
+  if (!arr || !arr.length) return null;
+  let total = 0;
+  const ws = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) {
+    let w = Number(getWeight(arr[i]));
+    if (!Number.isFinite(w) || w <= 0) w = 1;
+    ws[i] = w;
+    total += w;
+  }
+  if (!Number.isFinite(total) || total <= 0) return arr[Math.floor(Math.random() * arr.length)];
+
+  let r = Math.random() * total;
+  for (let i = 0; i < arr.length; i++) {
+    r -= ws[i];
+    if (r <= 0) return arr[i];
+  }
+  return arr[arr.length - 1];
+}
+
+function rollCardByStars(stars) {
+  if (stars < 3) return null;
+
+  // 評価★ごとの排出確率テーブル（合計 1.0）
+  const DROP_TABLE = {
+    3: [
+      { tier: 3, p: 0.85 },
+      { tier: 4, p: 0.15 },
+    ],
+    4: [
+      { tier: 3, p: 0.60 },
+      { tier: 4, p: 0.30 },
+      { tier: 5, p: 0.10 },
+    ],
+    5: [
+      { tier: 3, p: 0.45 },
+      { tier: 4, p: 0.35 },
+      { tier: 5, p: 0.20 },
+    ],
+  };
+
+  const table = DROP_TABLE[Math.min(5, stars)];
+  if (!table) return null;
+
+  // tier抽選
+  let r = Math.random();
+  let tier = null;
+  for (const row of table) {
+    r -= row.p;
+    if (r <= 0) {
+      tier = row.tier;
+      break;
+    }
+  }
+  if (!tier) tier = table[table.length - 1].tier;
+
+  // CSVプールから抽選
+  const pool = cardPoolByRarity?.[tier] || [];
+  if (!pool.length) return null;
+
+  const picked = pickWeighted(pool, (c) => c.weight ?? 1);
+  if (!picked) return null;
+
+  return { ...picked, rarity: tier };
+}
+
+function playCardEffect(rarity) {
+  try {
+    const el = document.createElement("div");
+    el.className = `card-effect r${rarity}`;
+    el.innerHTML = `<div class="card-effect-glow"></div>`;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), rarity === 5 ? 1550 : 1100);
+  } catch (_) {}
+}
+
 // ===== Mode =====
 let mode = "normal";
 function setMode(next) {
@@ -412,6 +540,180 @@ async function beginAutoStart() {
   startNewSession();
 }
 
+// ===== Result Overlay (kobun/bungakusi same flow) =====
+let resultOverlay = null;
+
+function getUserMessageByRate(percent) {
+  if (percent >= 90) return "素晴らしい！この調子！";
+  if (percent >= 70) return "よくできているぞ！";
+  if (percent >= 40) return "ここから更に積み重ねよう！";
+  return "まずは基礎から固めよう！";
+}
+function calcStars(score0, total) {
+  const percent = total ? (score0 / total) * 100 : 0;
+  if (percent >= 90) return 5;
+  if (percent >= 80) return 4;
+  if (percent >= 65) return 3;
+  if (percent >= 50) return 2;
+  return 1;
+}
+function calcRankName(stars, maxCombo0) {
+  const boost = maxCombo0 >= 6 ? 1 : 0;
+  const s = Math.min(5, Math.max(1, stars + boost));
+  const table = { 1: "見習い", 2: "一人前", 3: "職人", 4: "達人", 5: "神" };
+  return table[s];
+}
+
+function ensureResultOverlay() {
+  if (resultOverlay) return;
+
+  resultOverlay = document.createElement("div");
+  resultOverlay.className = "result-overlay";
+  resultOverlay.innerHTML = `
+    <div class="result-card" role="dialog" aria-modal="true">
+      <div class="result-head">
+        <div id="rankTitle" class="result-title">評価</div>
+        <div id="resultRate" class="result-rate">--%</div>
+      </div>
+
+      <div id="starsRow" class="stars" aria-label="星評価">
+        <div class="star">★</div>
+        <div class="star">★</div>
+        <div class="star">★</div>
+        <div class="star">★</div>
+        <div class="star">★</div>
+      </div>
+
+      <div id="resultSummary" class="result-summary">---</div>
+      <div id="resultDetails" class="result-details">---</div>
+
+      <div class="result-actions">
+        <button id="resultRestartBtn" class="ctrl" type="button">もう一回</button>
+        <button id="resultRetryWrongBtn" class="ctrl" type="button" disabled style="opacity:.45;">間違い復習</button>
+        <button id="resultCollectionBtn" class="ctrl" type="button">図鑑</button>
+        <button id="resultCloseBtn" class="ctrl" type="button">閉じる</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(resultOverlay);
+
+  const rankTitleEl = resultOverlay.querySelector("#rankTitle");
+  const rateEl = resultOverlay.querySelector("#resultRate");
+  const resultSummaryEl = resultOverlay.querySelector("#resultSummary");
+  const resultDetailsEl = resultOverlay.querySelector("#resultDetails");
+  const starsRow = resultOverlay.querySelector("#starsRow");
+
+  const resultBtnRestartEl = resultOverlay.querySelector("#resultRestartBtn");
+  const resultBtnCollectionEl = resultOverlay.querySelector("#resultCollectionBtn");
+  const resultBtnCloseEl = resultOverlay.querySelector("#resultCloseBtn");
+
+  function hide() {
+    resultOverlay.classList.remove("show");
+  }
+
+  resultOverlay.addEventListener("click", (e) => {
+    if (e.target === resultOverlay) hide();
+  });
+  if (resultBtnCloseEl) resultBtnCloseEl.addEventListener("click", hide);
+
+  if (resultBtnRestartEl) {
+    resultBtnRestartEl.addEventListener("click", () => {
+      hide();
+      stopTimer();
+      startNewSession();
+    });
+  }
+
+  if (resultBtnCollectionEl) {
+    resultBtnCollectionEl.addEventListener("click", () => {
+      window.location.href = "https://naoki496.github.io/cards-hub/";
+    });
+  }
+
+  resultOverlay._set = ({ stars, rankName, percent, summary, details }) => {
+    if (rankTitleEl) rankTitleEl.textContent = `評価：${rankName}`;
+    if (rateEl) rateEl.textContent = `${percent}%`;
+    if (resultSummaryEl) resultSummaryEl.textContent = summary;
+    if (resultDetailsEl) resultDetailsEl.innerHTML = details;
+
+    const starEls = starsRow ? Array.from(starsRow.querySelectorAll(".star")) : [];
+    starEls.forEach((el) => el.classList.remove("on", "pop"));
+
+    void resultOverlay.offsetWidth;
+    resultOverlay.classList.add("show");
+
+    for (let i = 0; i < Math.min(5, stars); i++) {
+      setTimeout(() => {
+        if (starEls[i]) {
+          starEls[i].classList.add("on", "pop");
+          setTimeout(() => starEls[i].classList.remove("pop"), 140);
+        }
+      }, 120 * i);
+    }
+  };
+}
+
+function showResultOverlay() {
+  ensureResultOverlay();
+
+  const total = order.length || 1;
+  const percent = Math.round((score / total) * 100);
+  const stars = calcStars(score, total);
+  const rank = calcRankName(stars, maxCombo);
+  const message = getUserMessageByRate(percent);
+  const modeLabel = mode === "endless" ? "連続学習" : "通常";
+
+  let rewardHtml = "";
+  if (mode === "normal") {
+    const card = rollCardByStars(stars);
+    if (card) {
+      const n = recordCard(card);
+      playCardEffect(card.rarity);
+
+      const specialMsg = card.rarity === 5 ? `<div style="margin-top:6px;">✨SSR！✨</div>` : "";
+
+      rewardHtml = `
+        <div class="card-reward">
+          <img src="${escapeHtml(card.img)}" alt="${escapeHtml(card.name)}" />
+          <div>
+            <div class="card-name">獲得：${escapeHtml(card.name)}</div>
+            <div class="card-meta">レアリティ：★${card.rarity} ／ 所持回数：${n}</div>
+            ${specialMsg}
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  const details = `
+    <div>正解 ${score} / ${total}</div>
+    <div>最大COMBO x${maxCombo}</div>
+    <div>モード ${escapeHtml(modeLabel)}</div>
+    ${rewardHtml}
+  `;
+
+  resultOverlay._set({
+    stars,
+    rankName: rank,
+    percent,
+    summary: message,
+    details,
+  });
+}
+
+function finish() {
+  stopTimer();
+  disableInput(true);
+  if (nextBtn) nextBtn.disabled = true;
+
+  if (progressEl) progressEl.textContent = "終了";
+  if (questionEl) questionEl.textContent = `結果：${score} / ${order.length}`;
+  if (sublineEl) sublineEl.textContent = "";
+  if (statusEl) statusEl.textContent = "おつかれさまでした。";
+
+  showResultOverlay();
+}
+
 // ===== Events =====
 if (submitBtn) submitBtn.addEventListener("click", () => judge());
 if (answerInput) answerInput.addEventListener("keydown", (e) => {
@@ -420,8 +722,7 @@ if (answerInput) answerInput.addEventListener("keydown", (e) => {
 
 if (nextBtn) nextBtn.addEventListener("click", () => {
   if (index >= order.length - 1) {
-    if (statusEl) statusEl.textContent = "終了";
-    stopTimer();
+    finish();
     return;
   }
   index++;
@@ -472,12 +773,37 @@ if (modeEndlessBtn) modeEndlessBtn.addEventListener("click", async (e) => {
     const raw = await window.CSVUtil.load(csvUrl);
 
     questions = raw.map(normalizeRow);
+
+    // ===== cards.csv load (for reward) =====
+    try {
+      uiLog("BOOT: loading cards.csv ...");
+      const cardsUrl = new URL("cards.csv", baseUrl).toString();
+      const rawCards = await window.CSVUtil.load(cardsUrl);
+
+      const nextCards = [];
+      for (const r of rawCards) {
+        try {
+          const c = normalizeCardRow(r);
+          if (c.id) nextCards.push(c);
+        } catch (_) {}
+      }
+      cardsAll = nextCards;
+      rebuildCardPoolsFromCsv();
+      uiLog(`BOOT: cards ready (cards=${cardsAll.length})`);
+    } catch (e) {
+      // cards が無い/壊れているなら“カード獲得だけ無効”
+      cardsAll = [];
+      cardPoolByRarity = { 3: [], 4: [], 5: [] };
+      uiLog("BOOT: cards.csv load failed (reward disabled)");
+    }
+
     if (!questions.length) throw new Error("questions.csv が空です");
 
     uiLog(`BOOT: ready (questions=${questions.length})`);
 
     disableInput(true);
     ensureTimerUI();
+    ensureResultOverlay();
     if (timerTextEl) timerTextEl.textContent = `${QUESTION_TIME_SEC.toFixed(0)}.0s`;
     if (timerInnerEl) timerInnerEl.style.width = "100%";
 
