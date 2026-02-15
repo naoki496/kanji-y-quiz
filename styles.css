@@ -1229,3 +1229,12 @@ html, body{
   18%  { transform: scale(1.00); opacity: 1.0; }
   100% { transform: scale(1.10); opacity: 0.0; }
 }
+
+/* ===== kanji-y theme variables ===== */
+:root{
+  --accent1: #ff3dcf;
+  --accent2: #ff1493;
+  --glow: rgba(255,61,207,0.28);
+  --glow-strong: rgba(255,61,207,0.55);
+  --border: rgba(255,61,207,0.35);
+}
